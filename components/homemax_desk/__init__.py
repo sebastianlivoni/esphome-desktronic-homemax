@@ -3,6 +3,9 @@ import esphome.config_validation as cv
 from esphome.components import binary_sensor, button, cover, number, sensor, uart
 from esphome.const import (
     CONF_ID,
+    DEVICE_CLASS_CONNECTIVITY,
+    ENTITY_CATEGORY_DIAGNOSTIC,
+    UNIT_PERCENT,
     DEVICE_CLASS_DURATION,
     DEVICE_CLASS_MOVING,
     STATE_CLASS_MEASUREMENT,
@@ -33,6 +36,10 @@ CONF_MOVING = "moving"
 CONF_STANDING = "standing"
 CONF_STANDING_TIME = "standing_time"
 CONF_COVER = "cover"
+CONF_HEIGHT_PERCENT = "height_percent"
+CONF_HEIGHT_MIN = "height_min"
+CONF_HEIGHT_MAX = "height_max"
+CONF_CONTROLLER_CONNECTED = "controller_connected"
 
 # Settings
 CONF_MOVE_DURATION = "move_duration"
@@ -46,6 +53,21 @@ CONF_SAVE_POSITION1_COMMAND = "save_position1_command"
 CONF_SAVE_POSITION2_COMMAND = "save_position2_command"
 CONF_POSITION1_REPORT = "position1_report"
 CONF_POSITION2_REPORT = "position2_report"
+CONF_POSITION3_REPORT = "position3_report"
+CONF_POSITION4_REPORT = "position4_report"
+CONF_AUTO_LIMITS = "auto_limits"
+CONF_POLL_INTERVAL = "poll_interval"
+
+POSITION_SENSORS = {
+    CONF_POSITION1_HEIGHT: 1,
+    CONF_POSITION2_HEIGHT: 2,
+}
+POSITION_REPORTS = {
+    CONF_POSITION1_REPORT: 1,
+    CONF_POSITION2_REPORT: 2,
+    CONF_POSITION3_REPORT: 3,
+    CONF_POSITION4_REPORT: 4,
+}
 
 homemax_ns = cg.esphome_ns.namespace("homemax_desk")
 HomeMaxDesk = homemax_ns.class_("HomeMaxDesk", cg.Component, uart.UARTDevice)
@@ -104,6 +126,24 @@ CONFIG_SCHEMA = cv.All(
                 DeskButton, icon="mdi:arrow-down-bold"
             ),
             cv.Optional(CONF_STOP): button.button_schema(DeskButton, icon="mdi:stop"),
+            cv.Optional(CONF_HEIGHT_PERCENT): sensor.sensor_schema(
+                unit_of_measurement=UNIT_PERCENT,
+                accuracy_decimals=0,
+                icon="mdi:percent",
+                state_class=STATE_CLASS_MEASUREMENT,
+            ),
+            cv.Optional(CONF_HEIGHT_MIN): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CENTIMETER,
+                accuracy_decimals=1,
+                icon="mdi:arrow-collapse-down",
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Optional(CONF_HEIGHT_MAX): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CENTIMETER,
+                accuracy_decimals=1,
+                icon="mdi:arrow-collapse-up",
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
             cv.Optional(CONF_TARGET_HEIGHT): _height_number(
                 DeskHeightNumber, "mdi:human-male-height-variant"
             ),
@@ -152,7 +192,15 @@ CONFIG_SCHEMA = cv.All(
                 state_class=STATE_CLASS_TOTAL_INCREASING,
                 icon="mdi:timer-outline",
             ),
+            cv.Optional(CONF_CONTROLLER_CONNECTED): binary_sensor.binary_sensor_schema(
+                device_class=DEVICE_CLASS_CONNECTIVITY,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
             # Settings
+            cv.Optional(CONF_AUTO_LIMITS, default=True): cv.boolean,
+            cv.Optional(
+                CONF_POLL_INTERVAL, default="60s"
+            ): cv.positive_time_period_milliseconds,
             cv.Optional(
                 CONF_MOVE_DURATION, default="1s"
             ): cv.positive_time_period_milliseconds,
@@ -168,6 +216,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_SAVE_POSITION2_COMMAND, default=0x04): cv.hex_uint8_t,
             cv.Optional(CONF_POSITION1_REPORT, default=0x25): cv.hex_uint8_t,
             cv.Optional(CONF_POSITION2_REPORT, default=0x26): cv.hex_uint8_t,
+            cv.Optional(CONF_POSITION3_REPORT, default=0x27): cv.hex_uint8_t,
+            cv.Optional(CONF_POSITION4_REPORT, default=0x28): cv.hex_uint8_t,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -200,22 +250,27 @@ async def to_code(config):
             config[CONF_SAVE_POSITION1_COMMAND], config[CONF_SAVE_POSITION2_COMMAND]
         )
     )
-    cg.add(
-        var.set_position_reports(
-            config[CONF_POSITION1_REPORT], config[CONF_POSITION2_REPORT]
-        )
-    )
+    cg.add(var.set_auto_limits(config[CONF_AUTO_LIMITS]))
+    cg.add(var.set_poll_interval(config[CONF_POLL_INTERVAL]))
+    for key, slot in POSITION_REPORTS.items():
+        cg.add(var.set_position_report(slot, config[key]))
 
     # Sensors
     if CONF_HEIGHT in config:
         sens = await sensor.new_sensor(config[CONF_HEIGHT])
         cg.add(var.set_height_sensor(sens))
-    if CONF_POSITION1_HEIGHT in config:
-        sens = await sensor.new_sensor(config[CONF_POSITION1_HEIGHT])
-        cg.add(var.set_position1_sensor(sens))
-    if CONF_POSITION2_HEIGHT in config:
-        sens = await sensor.new_sensor(config[CONF_POSITION2_HEIGHT])
-        cg.add(var.set_position2_sensor(sens))
+    for key, slot in POSITION_SENSORS.items():
+        if key in config:
+            sens = await sensor.new_sensor(config[key])
+            cg.add(var.set_position_sensor(slot, sens))
+    for key, setter in (
+        (CONF_HEIGHT_PERCENT, "set_height_percent_sensor"),
+        (CONF_HEIGHT_MIN, "set_height_min_sensor"),
+        (CONF_HEIGHT_MAX, "set_height_max_sensor"),
+    ):
+        if key in config:
+            sens = await sensor.new_sensor(config[key])
+            cg.add(getattr(var, setter)(sens))
     if CONF_STANDING_TIME in config:
         sens = await sensor.new_sensor(config[CONF_STANDING_TIME])
         cg.add(var.set_standing_time_sensor(sens))
@@ -227,6 +282,9 @@ async def to_code(config):
     if CONF_STANDING in config:
         bs = await binary_sensor.new_binary_sensor(config[CONF_STANDING])
         cg.add(var.set_standing_sensor(bs))
+    if CONF_CONTROLLER_CONNECTED in config:
+        bs = await binary_sensor.new_binary_sensor(config[CONF_CONTROLLER_CONNECTED])
+        cg.add(var.set_connected_sensor(bs))
 
     # Buttons
     for key, action in BUTTON_ACTIONS.items():

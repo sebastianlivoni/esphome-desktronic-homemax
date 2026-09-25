@@ -2,17 +2,19 @@
 
 An [ESPHome](https://esphome.io) component for **Desktronic HomeMax** standing desks. It connects an ESP32 to the desk controller's RJ12 port so you can control the desk from Home Assistant: move it, go to a specific height, use and save memory positions, and track how much you stand.
 
-The HomeMax uses a Jiecang-type controller that talks serial (UART) at 9600 baud. This component was written and tested on a HomeMax with an ESP32-C3 Super Mini.
+The HomeMax uses a Jiecang controller that talks serial (UART) at 9600 baud. This component was written and tested on a HomeMax with an ESP32-C3 Super Mini and controller **JCP35N12-Y18-4G2/4MF** (the label on the control box under the desk).
 
 ## Features
 
 - **Height sensor**, updated whenever the desk moves, including when you use the handset
+- **Height range read from the controller**, plus height in percent
 - **Move up / Move down / Stop** buttons
 - **Go to height**: type a height in cm and the desk moves there, with safety stops
 - **Memory positions 1 and 2**: go to them, see their stored heights, save the current height, or set a new height directly
 - **Cover entity**: the desk shows up like a blind in Home Assistant, with a 0–100% slider and voice assistant support
 - **Moving** and **Standing** binary sensors
 - **Standing time today** in minutes
+- **Controller connected** sensor, so a loose cable is easy to spot
 - Lambda functions for your own automations, such as `id(desk).goto_height(80);`
 
 ## Hardware
@@ -99,6 +101,8 @@ Every entity is optional. Add only the ones you want.
 | Key | Type | Description |
 |---|---|---|
 | `height` | sensor | Current height in cm |
+| `height_percent` | sensor | Height in % of the desk's range |
+| `height_min`, `height_max` | sensor | Height range reported by the controller |
 | `move_up` | button | Move up for `move_duration` |
 | `move_down` | button | Move down for `move_duration` |
 | `stop` | button | Stop any movement |
@@ -112,6 +116,7 @@ Every entity is optional. Add only the ones you want.
 | `moving` | binary sensor | On while the desk is moving |
 | `standing` | binary sensor | On at or above `standing_height` |
 | `standing_time` | sensor | Minutes spent standing since the last reset |
+| `controller_connected` | binary sensor | Off when the controller stops answering |
 
 ### Settings
 
@@ -119,14 +124,16 @@ Every entity is optional. Add only the ones you want.
 |---|---|---|
 | `move_duration` | `1s` | How long Move up / Move down move per press. Pressing again during a move extends it. |
 | `stop_early` | `5` | Stop this many mm before a target, because the desk coasts a little after stopping |
-| `min_height` | `50` | Lowest height in cm. Set this to your desk's real minimum. |
-| `max_height` | `140` | Highest height in cm. Set this to your desk's real maximum. |
+| `auto_limits` | `true` | Read the height range from the controller |
+| `min_height` | `50` | Lowest height in cm, used until the controller reports its range (or always, with `auto_limits: false`) |
+| `max_height` | `140` | Highest height in cm, as above |
 | `standing_height` | `95` | Height in cm from which you count as standing |
+| `poll_interval` | `60s` | How often to check that the controller answers while idle. `0s` turns it off. |
 | `position1_command`, `position2_command` | `0x05`, `0x06` | Command bytes for going to a memory position |
 | `save_position1_command`, `save_position2_command` | `0x03`, `0x04` | Command bytes for saving a memory position |
-| `position1_report`, `position2_report` | `0x25`, `0x26` | Message types the controller uses to report stored positions |
+| `position1_report` … `position4_report` | `0x25` … `0x28` | Message types the controller uses to report stored positions |
 
-To find your desk's real height range, move it all the way down and all the way up, and read the Height sensor at both ends.
+With `auto_limits`, the component asks the controller for its height range and uses it for the cover, the percentage and the go-to-height limits. The number sliders in Home Assistant pick up the new range the next time Home Assistant connects to the device, for example after a restart. Set `min_height` and `max_height` to your desk's range anyway, so the sliders are right from the start. On the HomeMax that's 75–119 cm.
 
 ### Resetting the standing time
 
@@ -145,6 +152,10 @@ time:
 
 The counter isn't saved across restarts.
 
+### Diagnostics
+
+`controller_connected` checks that the controller still answers. While the desk is idle, the component sends a harmless request (`0x20`, read user limits) every `poll_interval`. If there's no answer, the sensor turns off.
+
 ## Lambda functions
 
 For template buttons, scripts, and automations:
@@ -157,12 +168,15 @@ For template buttons, scripts, and automations:
 | `id(desk).goto_position(1)` | Go to memory position 1 or 2 |
 | `id(desk).save_position(1)` | Save the current height as position 1 or 2 |
 | `id(desk).set_position_height(1, 110)` | Move to 110 cm and save it as position 1 |
-| `id(desk).request_settings()` | Ask the controller for the stored positions |
+| `id(desk).request_settings()` | Ask the controller for the stored positions and height range |
 | `id(desk).reset_standing_time()` | Reset the standing time |
 | `id(desk).send_command(0x05)` | Send any single-byte command: `F1 F1 <cmd> 00 <cmd> 7E` |
 | `id(desk).get_height()` | Current height in cm, `NAN` if unknown |
+| `id(desk).get_height_percent()` | Height in % of the range, `NAN` if unknown |
+| `id(desk).get_min_height()` / `get_max_height()` | Height range in cm |
 | `id(desk).is_moving()` | `true` while the desk moves |
 | `id(desk).is_standing()` | `true` at or above `standing_height` |
+| `id(desk).is_connected()` | `true` while the controller answers |
 | `id(desk).get_standing_minutes()` | Standing time since the last reset |
 
 Example preset buttons:
@@ -216,16 +230,24 @@ Because the controller is silent when idle, the component doesn't know the heigh
 
 ### Verified and unverified commands
 
-These were verified on a HomeMax:
+Verified on a HomeMax with a JCP35N12 controller:
 
-- Up `0x01`, Down `0x02`, Stop `0x2B`
-- Height reports (type `0x01`)
+| Direction | Bytes | Meaning |
+|---|---|---|
+| to controller | `0x01`, `0x02`, `0x2B` | Up, Down, Stop |
+| to controller | `0x07` | Request stored positions |
+| to controller | `0x0C` | Request physical height limits |
+| to controller | `0x20` | Request user limits |
+| from controller | type `0x01` | Current height |
+| from controller | type `0x07`, 4 bytes | Height range: max (2 bytes), min (2 bytes). HomeMax: `04 A6 02 EE` = 119.0 / 75.0 cm |
+| from controller | type `0x20`, 1 byte | User limits (`00` = none set) |
+| from controller | types `0x27`, `0x28` | Stored positions 3 and 4 (`00 00` = not set), only logged |
 
-These are the usual Jiecang values but may differ on your controller, which is why they can be changed in the config:
+These are the usual Jiecang values but haven't been confirmed yet, which is why they can be changed in the config:
 
 - Go to position `0x05` / `0x06`
 - Save position `0x03` / `0x04`
-- Position reports `0x25` / `0x26`, requested with `0x07`
+- Position reports `0x25` / `0x26` for positions 1 and 2
 
 The component logs every message it doesn't recognize at DEBUG level, for example `Message type 0x25, 2 bytes: 02 EE`. That's the easiest way to find the right values for your controller.
 
@@ -239,6 +261,8 @@ The component logs every message it doesn't recognize at DEBUG level, for exampl
 
 **WiFi is unreliable.** Many ESP32-C3 Super Mini boards have a poorly matched antenna. `output_power: 8.5dB` under `wifi:` often helps.
 
+**Controller Connected is off.** The controller doesn't answer requests. Check the TX wire (ESP32 → controller RX) and the shared ground. If everything else works, set `poll_interval: 0s` to turn the check off.
+
 **Memory positions don't work.** Your controller may use different command bytes. Watch the DEBUG log for unrecognized messages, or see [Verified and unverified commands](#verified-and-unverified-commands).
 
 ## Acknowledgements
@@ -248,3 +272,7 @@ Protocol knowledge builds on the community's work on Jiecang controllers, includ
 ## Disclaimer
 
 This project isn't affiliated with Desktronic or Jiecang. Connecting anything to your desk's controller is at your own risk. Keep the area around the desk clear when testing movement commands.
+
+## License
+
+Public domain, released under [The Unlicense](LICENSE). Use it, copy it, change it, sell it: do whatever you want, no credit needed.

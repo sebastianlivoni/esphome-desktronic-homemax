@@ -28,6 +28,12 @@ homemax_desk:
   # Height and movement
   height:
     name: "Height"
+  height_percent:
+    name: "Height Percent"
+  height_min:
+    name: "Height Min"
+  height_max:
+    name: "Height Max"
   move_up:
     name: "Move up"
   move_down:
@@ -75,19 +81,17 @@ homemax_desk:
     name: "Standing"
   standing_time:
     name: "Standing Time Today"
+  controller_connected:
+    name: "Controller Connected"
 
   # Settings
+  auto_limits: true        # read the height range from the controller
+  min_height: 75           # cm, used until the controller reports its range
+  max_height: 119          # cm
+  standing_height: 95      # cm, from this height on you count as standing
+  poll_interval: 60s       # keep-alive for "Controller Connected", 0s = off
   move_duration: 1s        # how long Move up / Move down move per press
   stop_early: 5            # mm, stop this close to a target (desk coasts a bit)
-  min_height: 75           # cm, your desk's lowest height (0% for the cover)
-  max_height: 118          # cm, your desk's highest height (100% for the cover)
-  standing_height: 105      # cm, from this height on you count as standing
-  position1_command: 0x05  # change these if your controller uses other bytes
-  position2_command: 0x06
-  save_position1_command: 0x03
-  save_position2_command: 0x04
-  position1_report: 0x25
-  position2_report: 0x26
 
 button:
   - platform: template
