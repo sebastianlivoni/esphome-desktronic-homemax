@@ -1,0 +1,108 @@
+esphome:
+  name: desktronic-homemax
+  friendly_name: Desktronic HomeMax
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [ homemax_desk ]
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO21   # -> LV4 -> HV4 -> RJ12 pin 5 (desk RX)
+  rx_pin: GPIO20   # <- LV3 <- HV3 <- RJ12 pin 3 (desk TX)
+  baud_rate: 9600
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  level: DEBUG
+
+homemax_desk:
+  id: desk
+  height:
+    name: "Height"
+  move_up:
+    name: "Move up"
+  move_down:
+    name: "Move down"
+  stop:
+    name: "Stop"
+  position1:
+    name: "Position 1"
+  position2:
+    name: "Position 2"
+  position1_height:
+    name: "Position 1 Height"
+  position2_height:
+    name: "Position 2 Height"
+  refresh_positions:
+    name: "Refresh Positions"
+  save_position1:
+    name: "Save Current as Position 1"
+  save_position2:
+    name: "Save Current as Position 2"
+  set_position1:
+    name: "Set Position 1"
+    mode: box
+  set_position2:
+    name: "Set Position 2"
+    mode: box
+  target_height:
+    name: "Target Height"
+    mode: box
+  move_duration: 1s   # how long Move up / Move down move per press
+  stop_early: 5       # mm, stop this close to the target (desk coasts a bit)
+  min_height: 50      # cm, Target Height range
+  max_height: 140
+  position1_command: 0x05   # change if your controller uses other bytes
+  position2_command: 0x06
+  position1_report: 0x25    # message type the controller uses to report them
+  position2_report: 0x26
+  save_position1_command: 0x03
+  save_position2_command: 0x04
+
+button:
+  - platform: template
+    name: "Desk Sit"
+    icon: "mdi:chair-rolling"
+    on_press:
+      - lambda: "id(desk).goto_height(75);"
+
+  - platform: template
+    name: "Desk Stand"
+    icon: "mdi:human-handsup"
+    on_press:
+      - lambda: "id(desk).goto_height(110);"
+
+api:
+  encryption:
+    key: "xWl/JiWZIUPF1svCeaWnYeCXLNqXBAziAZcJJu4zuCA="
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: "IoT-2.4G"
+  password: "Pakke335"
+  output_power: 8.5dB
+  ap:
+    ssid: "Livingroom Fallback Hotspot"
+    password: "jEjcOEjjRjeY"
+
+captive_portal:
+
+output:
+  - platform: gpio
+    pin: GPIO8
+    id: led_out
+    inverted: true
+
+light:
+  - platform: binary
+    name: "Onboard LED"
+    output: led_out
