@@ -1,0 +1,250 @@
+# esphome-desktronic-homemax
+
+An [ESPHome](https://esphome.io) component for **Desktronic HomeMax** standing desks. It connects an ESP32 to the desk controller's RJ12 port so you can control the desk from Home Assistant: move it, go to a specific height, use and save memory positions, and track how much you stand.
+
+The HomeMax uses a Jiecang-type controller that talks serial (UART) at 9600 baud. This component was written and tested on a HomeMax with an ESP32-C3 Super Mini.
+
+## Features
+
+- **Height sensor**, updated whenever the desk moves, including when you use the handset
+- **Move up / Move down / Stop** buttons
+- **Go to height**: type a height in cm and the desk moves there, with safety stops
+- **Memory positions 1 and 2**: go to them, see their stored heights, save the current height, or set a new height directly
+- **Cover entity**: the desk shows up like a blind in Home Assistant, with a 0–100% slider and voice assistant support
+- **Moving** and **Standing** binary sensors
+- **Standing time today** in minutes
+- Lambda functions for your own automations, such as `id(desk).goto_height(80);`
+
+## Hardware
+
+You need:
+
+- An ESP32 board. The example uses an **ESP32-C3 Super Mini**, but any ESP32 with a free UART works.
+- A **bidirectional logic level converter** (3.3 V ↔ 5 V), for example a 4-channel BSS138 module. The desk uses 5 V logic and the ESP32 uses 3.3 V, so don't connect them directly.
+- An **RJ12 breakout board** or a cut RJ12 cable to reach the controller's pins.
+- A USB power supply for the ESP32 (see [Power](#power)).
+
+### Wiring
+
+| RJ12 (controller) | Level converter | ESP32-C3 Super Mini |
+|---|---|---|
+| Pin 3 (controller TX) | HV3 → LV3 | GPIO 20 (RX) |
+| Pin 5 (controller RX) | HV4 → LV4 | GPIO 21 (TX) |
+| GND | GND | G |
+| 5 V | not connected | not connected |
+| | HV | 5V |
+| | LV | 3V3 |
+
+All grounds must be connected together. The level converter's HV side gets 5 V from the ESP32's 5V pin, and the LV side gets 3.3 V from the 3V3 pin.
+
+> **Check your pins with a multimeter before connecting anything.** Pin numbering depends on which way you count, and other controller models may differ. With the controller powered, the controller's TX pin sits near 5 V and flickers while the desk moves. Never connect the level converter to a pin that carries more than 5 V.
+
+### Power
+
+Power the ESP32 from a USB charger, not from the desk's RJ12 5 V pin. In testing, the desk's port couldn't supply enough current once WiFi started, so the ESP32 powered up but never connected.
+
+Never connect the desk's 5 V and USB power at the same time. That connects two power supplies together and can damage the USB port, the ESP32, or the controller.
+
+## Installation
+
+Add the component to your ESPHome config:
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/YOUR-NAME/esphome-desktronic-homemax
+    components: [ homemax_desk ]
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO21
+  rx_pin: GPIO20
+  baud_rate: 9600
+
+homemax_desk:
+  id: desk
+  height:
+    name: "Height"
+  move_up:
+    name: "Move up"
+  move_down:
+    name: "Move down"
+  stop:
+    name: "Stop"
+```
+
+A complete example with every feature is in [`desktronic-homemax.yaml`](desktronic-homemax.yaml). It expects a `secrets.yaml` next to it:
+
+```yaml
+wifi_ssid: "your-wifi"
+wifi_password: "your-password"
+ap_password: "fallback-hotspot-password"
+api_key: "generate one at https://esphome.io/components/api.html"
+```
+
+On an ESP32-C3, keep logging on USB so it doesn't interfere with the desk's UART:
+
+```yaml
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+```
+
+## Configuration
+
+Every entity is optional. Add only the ones you want.
+
+### Entities
+
+| Key | Type | Description |
+|---|---|---|
+| `height` | sensor | Current height in cm |
+| `move_up` | button | Move up for `move_duration` |
+| `move_down` | button | Move down for `move_duration` |
+| `stop` | button | Stop any movement |
+| `target_height` | number | Move to a height in cm |
+| `cover` | cover | The desk as a cover: 0% = `min_height`, 100% = `max_height` |
+| `position1`, `position2` | button | Go to memory position 1 or 2 |
+| `position1_height`, `position2_height` | sensor | Stored height of memory position 1 or 2 |
+| `save_position1`, `save_position2` | button | Save the current height as position 1 or 2 |
+| `set_position1`, `set_position2` | number | Move to a height, then save it as position 1 or 2 |
+| `refresh_positions` | button | Ask the controller for the stored positions |
+| `moving` | binary sensor | On while the desk is moving |
+| `standing` | binary sensor | On at or above `standing_height` |
+| `standing_time` | sensor | Minutes spent standing since the last reset |
+
+### Settings
+
+| Key | Default | Description |
+|---|---|---|
+| `move_duration` | `1s` | How long Move up / Move down move per press. Pressing again during a move extends it. |
+| `stop_early` | `5` | Stop this many mm before a target, because the desk coasts a little after stopping |
+| `min_height` | `50` | Lowest height in cm. Set this to your desk's real minimum. |
+| `max_height` | `140` | Highest height in cm. Set this to your desk's real maximum. |
+| `standing_height` | `95` | Height in cm from which you count as standing |
+| `position1_command`, `position2_command` | `0x05`, `0x06` | Command bytes for going to a memory position |
+| `save_position1_command`, `save_position2_command` | `0x03`, `0x04` | Command bytes for saving a memory position |
+| `position1_report`, `position2_report` | `0x25`, `0x26` | Message types the controller uses to report stored positions |
+
+To find your desk's real height range, move it all the way down and all the way up, and read the Height sensor at both ends.
+
+### Resetting the standing time
+
+The standing time counts up until you reset it. To reset it every night, use a time source:
+
+```yaml
+time:
+  - platform: homeassistant
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 0
+        then:
+          - lambda: "id(desk).reset_standing_time();"
+```
+
+The counter isn't saved across restarts.
+
+## Lambda functions
+
+For template buttons, scripts, and automations:
+
+| Function | Description |
+|---|---|
+| `id(desk).move_up()` / `move_down()` | Move for `move_duration` |
+| `id(desk).stop()` | Stop any movement |
+| `id(desk).goto_height(80)` | Move to 80 cm |
+| `id(desk).goto_position(1)` | Go to memory position 1 or 2 |
+| `id(desk).save_position(1)` | Save the current height as position 1 or 2 |
+| `id(desk).set_position_height(1, 110)` | Move to 110 cm and save it as position 1 |
+| `id(desk).request_settings()` | Ask the controller for the stored positions |
+| `id(desk).reset_standing_time()` | Reset the standing time |
+| `id(desk).send_command(0x05)` | Send any single-byte command: `F1 F1 <cmd> 00 <cmd> 7E` |
+| `id(desk).get_height()` | Current height in cm, `NAN` if unknown |
+| `id(desk).is_moving()` | `true` while the desk moves |
+| `id(desk).is_standing()` | `true` at or above `standing_height` |
+| `id(desk).get_standing_minutes()` | Standing time since the last reset |
+
+Example preset buttons:
+
+```yaml
+button:
+  - platform: template
+    name: "Desk Sit"
+    on_press:
+      - lambda: "id(desk).goto_height(75);"
+  - platform: template
+    name: "Desk Stand"
+    on_press:
+      - lambda: "id(desk).goto_height(110);"
+```
+
+## How it works
+
+### Protocol
+
+Messages from the ESP32 to the controller:
+
+```
+F1 F1 <command> <length> <data...> <checksum> 7E
+```
+
+Messages from the controller:
+
+```
+F2 F2 <type> <length> <data...> <checksum> 7E
+```
+
+The checksum is the sum of the command or type byte, the length byte, and all data bytes, truncated to one byte.
+
+The controller reports the current height while the desk moves, and stays silent when it's idle:
+
+```
+F2 F2 01 03 02 EE 07 FB 7E
+         │  │  └─┴── height in mm: 0x02EE = 750 = 75.0 cm
+         │  └─────── 3 data bytes
+         └────────── type 0x01: current height
+```
+
+### Continuous movement
+
+The HomeMax controller only keeps moving while movement commands keep arriving, just like when you hold a button on the handset. A single "up" command barely moves the desk. So Move up, Move down, and go-to-height repeat the command every 100 ms and send Stop at the end.
+
+Go-to-height keeps moving toward the target while reading the height reports, and stops when the desk is within `stop_early` mm of the target. For safety, it also stops if the height stops changing for 3 seconds (for example at a limit) or after 30 seconds.
+
+Because the controller is silent when idle, the component doesn't know the height right after startup. The first go-to-height command nudges the desk briefly to get a reading.
+
+### Verified and unverified commands
+
+These were verified on a HomeMax:
+
+- Up `0x01`, Down `0x02`, Stop `0x2B`
+- Height reports (type `0x01`)
+
+These are the usual Jiecang values but may differ on your controller, which is why they can be changed in the config:
+
+- Go to position `0x05` / `0x06`
+- Save position `0x03` / `0x04`
+- Position reports `0x25` / `0x26`, requested with `0x07`
+
+The component logs every message it doesn't recognize at DEBUG level, for example `Message type 0x25, 2 bytes: 02 EE`. That's the easiest way to find the right values for your controller.
+
+## Troubleshooting
+
+**The Height sensor stays empty.** The controller only reports while the desk moves. Move it once with the handset. If it's still empty, the controller's TX line isn't reaching the ESP32's RX pin: check the wiring, the shared ground, and whether TX and RX are swapped.
+
+**Height works, but the desk doesn't move.** The ESP32's TX line isn't reaching the controller's RX pin. Check that wire, and try swapping the two data wires on the level converter.
+
+**The ESP32 powers up from the desk but WiFi doesn't connect.** The desk's 5 V can't supply enough current. Power the ESP32 over USB instead.
+
+**WiFi is unreliable.** Many ESP32-C3 Super Mini boards have a poorly matched antenna. `output_power: 8.5dB` under `wifi:` often helps.
+
+**Memory positions don't work.** Your controller may use different command bytes. Watch the DEBUG log for unrecognized messages, or see [Verified and unverified commands](#verified-and-unverified-commands).
+
+## Acknowledgements
+
+Protocol knowledge builds on the community's work on Jiecang controllers, including [Rocka84's ESPHome components](https://github.com/Rocka84/esphome_components).
+
+## Disclaimer
+
+This project isn't affiliated with Desktronic or Jiecang. Connecting anything to your desk's controller is at your own risk. Keep the area around the desk clear when testing movement commands.
