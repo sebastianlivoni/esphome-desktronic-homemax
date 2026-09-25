@@ -39,6 +39,8 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void set_height_percent_sensor(sensor::Sensor *s) { this->height_percent_sensor_ = s; }
   void set_height_min_sensor(sensor::Sensor *s) { this->height_min_sensor_ = s; }
   void set_height_max_sensor(sensor::Sensor *s) { this->height_max_sensor_ = s; }
+  void set_user_min_sensor(sensor::Sensor *s) { this->user_min_sensor_ = s; }
+  void set_user_max_sensor(sensor::Sensor *s) { this->user_max_sensor_ = s; }
   void set_target_number(number::Number *n) { this->target_number_ = n; }
   void set_position_sensor(uint8_t slot, sensor::Sensor *s) {
     if (slot >= 1 && slot <= NUM_CONTROLLABLE)
@@ -62,8 +64,8 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void set_stop_early(int mm) { this->stop_early_ = mm; }
   void set_standing_height(float cm) { this->standing_height_ = (int) (cm * 10 + 0.5f); }
   void set_height_limits(float min_cm, float max_cm) {
-    this->min_height_ = (int) (min_cm * 10 + 0.5f);
-    this->max_height_ = (int) (max_cm * 10 + 0.5f);
+    this->config_min_ = this->min_height_ = (int) (min_cm * 10 + 0.5f);
+    this->config_max_ = this->max_height_ = (int) (max_cm * 10 + 0.5f);
   }
   void set_auto_limits(bool a) { this->auto_limits_ = a; }
   void set_poll_interval(uint32_t ms) { this->poll_interval_ms_ = ms; }
@@ -114,13 +116,16 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   enum Request : uint8_t {
     REQ_SETTINGS = 1 << 0,  // 0x07: stored positions
     REQ_LIMITS = 1 << 1,    // 0x0C: physical height limits
-    REQ_POLL = 1 << 2,      // 0x20: user limits, used as a keep-alive
+    REQ_POLL = 1 << 2,      // 0x20: user limits, also used as a keep-alive
   };
 
   void handle_byte_(uint8_t c);
   void handle_frame_(uint8_t type, const uint8_t *data, uint8_t len);
   void on_height_(int h);
-  void on_limits_(int max_h, int min_h);
+  void on_physical_limits_(int max_h, int min_h);
+  void on_user_limit_flags_(uint8_t flags);
+  void on_user_limit_(bool is_max, int h);
+  void apply_limits_();
   void update_moving_(uint32_t now);
   void update_posture_(uint32_t now);
   void update_connected_(uint32_t now);
@@ -136,6 +141,8 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   sensor::Sensor *height_percent_sensor_{nullptr};
   sensor::Sensor *height_min_sensor_{nullptr};
   sensor::Sensor *height_max_sensor_{nullptr};
+  sensor::Sensor *user_min_sensor_{nullptr};
+  sensor::Sensor *user_max_sensor_{nullptr};
   number::Number *target_number_{nullptr};
   sensor::Sensor *position_sensor_[NUM_CONTROLLABLE]{};
   number::Number *position_number_[NUM_CONTROLLABLE]{};
@@ -151,7 +158,13 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   int min_height_{500};
   int max_height_{1400};
   bool auto_limits_{true};
-  bool limits_known_{false};
+  bool limits_known_{false};  // physical limits received
+  int physical_min_{-1};      // mm, -1 = unknown
+  int physical_max_{-1};
+  int user_min_{-1};          // mm, -1 = not set
+  int user_max_{-1};
+  int config_min_{500};       // from min_height / max_height
+  int config_max_{1400};
   int standing_height_{950};
   uint32_t poll_interval_ms_{60000};
   uint8_t position_cmd_[NUM_CONTROLLABLE]{0x05, 0x06};

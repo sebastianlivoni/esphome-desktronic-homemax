@@ -7,7 +7,7 @@ The HomeMax uses a Jiecang controller that talks serial (UART) at 9600 baud. Thi
 ## Features
 
 - **Height sensor**, updated whenever the desk moves, including when you use the handset
-- **Height range read from the controller**, plus height in percent
+- **Height range read from the controller**, including user height limits set with the handset, plus height in percent
 - **Move up / Move down / Stop** buttons
 - **Go to height**: type a height in cm and the desk moves there, with safety stops
 - **Memory positions 1 and 2**: go to them, see their stored heights, save the current height, or set a new height directly
@@ -102,7 +102,8 @@ Every entity is optional. Add only the ones you want.
 |---|---|---|
 | `height` | sensor | Current height in cm |
 | `height_percent` | sensor | Height in % of the desk's range |
-| `height_min`, `height_max` | sensor | Height range reported by the controller |
+| `height_min`, `height_max` | sensor | Usable height range: the user limits where set, otherwise the physical range |
+| `user_height_min`, `user_height_max` | sensor | User height limits set with the handset (empty if not set) |
 | `move_up` | button | Move up for `move_duration` |
 | `move_down` | button | Move down for `move_duration` |
 | `stop` | button | Stop any movement |
@@ -124,16 +125,16 @@ Every entity is optional. Add only the ones you want.
 |---|---|---|
 | `move_duration` | `1s` | How long Move up / Move down move per press. Pressing again during a move extends it. |
 | `stop_early` | `5` | Stop this many mm before a target, because the desk coasts a little after stopping |
-| `auto_limits` | `true` | Read the height range from the controller |
+| `auto_limits` | `true` | Read the height range and user limits from the controller |
 | `min_height` | `50` | Lowest height in cm, used until the controller reports its range (or always, with `auto_limits: false`) |
 | `max_height` | `140` | Highest height in cm, as above |
 | `standing_height` | `95` | Height in cm from which you count as standing |
-| `poll_interval` | `60s` | How often to check that the controller answers while idle. `0s` turns it off. |
+| `poll_interval` | `60s` | How often to read the user limits while idle, which also checks that the controller answers. `0s` turns it off. |
 | `position1_command`, `position2_command` | `0x05`, `0x06` | Command bytes for going to a memory position |
 | `save_position1_command`, `save_position2_command` | `0x03`, `0x04` | Command bytes for saving a memory position |
 | `position1_report` … `position4_report` | `0x25` … `0x28` | Message types the controller uses to report stored positions |
 
-With `auto_limits`, the component asks the controller for its height range and uses it for the cover, the percentage and the go-to-height limits. The number sliders in Home Assistant pick up the new range the next time Home Assistant connects to the device, for example after a restart. Set `min_height` and `max_height` to your desk's range anyway, so the sliders are right from the start. On the HomeMax that's 75–119 cm.
+With `auto_limits`, the component asks the controller for its height range and uses it for the cover, the percentage and the go-to-height limits. If you set a user height limit with the handset (for example so the desk never goes below 80 cm), that limit replaces the physical one on that side. The component reads the user limits every `poll_interval`, so a change on the handset shows up within a minute. The number sliders in Home Assistant pick up the new range the next time Home Assistant connects to the device, for example after a restart. Set `min_height` and `max_height` to your desk's range anyway, so the sliders are right from the start. On the HomeMax that's 75–119 cm.
 
 ### Resetting the standing time
 
@@ -154,7 +155,7 @@ The counter isn't saved across restarts.
 
 ### Diagnostics
 
-`controller_connected` checks that the controller still answers. While the desk is idle, the component sends a harmless request (`0x20`, read user limits) every `poll_interval`. If there's no answer, the sensor turns off.
+`controller_connected` checks that the controller still answers. While the desk is idle, the component reads the user limits (`0x20`) every `poll_interval`. If there's no answer, the sensor turns off.
 
 ## Lambda functions
 
@@ -173,7 +174,7 @@ For template buttons, scripts, and automations:
 | `id(desk).send_command(0x05)` | Send any single-byte command: `F1 F1 <cmd> 00 <cmd> 7E` |
 | `id(desk).get_height()` | Current height in cm, `NAN` if unknown |
 | `id(desk).get_height_percent()` | Height in % of the range, `NAN` if unknown |
-| `id(desk).get_min_height()` / `get_max_height()` | Height range in cm |
+| `id(desk).get_min_height()` / `get_max_height()` | Usable height range in cm, including user limits |
 | `id(desk).is_moving()` | `true` while the desk moves |
 | `id(desk).is_standing()` | `true` at or above `standing_height` |
 | `id(desk).is_connected()` | `true` while the controller answers |
@@ -244,6 +245,9 @@ Verified on a HomeMax with a JCP35N12 controller:
 | from controller | types `0x27`, `0x28` | Stored positions 3 and 4 (`00 00` = not set), only logged |
 
 These are the usual Jiecang values but haven't been confirmed yet, which is why they can be changed in the config:
+
+- User limit flags in the `0x20` reply: low nibble = maximum set, high nibble = minimum set
+- User maximum and minimum heights, types `0x21` and `0x22`
 
 - Go to position `0x05` / `0x06`
 - Save position `0x03` / `0x04`

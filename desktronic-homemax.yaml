@@ -34,6 +34,10 @@ homemax_desk:
     name: "Height Min"
   height_max:
     name: "Height Max"
+  user_height_min:
+    name: "User Height Min"
+  user_height_max:
+    name: "User Height Max"
   move_up:
     name: "Move up"
   move_down:
@@ -85,11 +89,11 @@ homemax_desk:
     name: "Controller Connected"
 
   # Settings
-  auto_limits: true        # read the height range from the controller
+  auto_limits: true        # read the height range and user limits from the controller
   min_height: 75           # cm, used until the controller reports its range
   max_height: 119          # cm
   standing_height: 95      # cm, from this height on you count as standing
-  poll_interval: 60s       # keep-alive for "Controller Connected", 0s = off
+  poll_interval: 60s       # how often to read user limits / check the connection, 0s = off
   move_duration: 1s        # how long Move up / Move down move per press
   stop_early: 5            # mm, stop this close to a target (desk coasts a bit)
 

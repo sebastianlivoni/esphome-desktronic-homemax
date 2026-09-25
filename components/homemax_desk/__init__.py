@@ -39,6 +39,8 @@ CONF_COVER = "cover"
 CONF_HEIGHT_PERCENT = "height_percent"
 CONF_HEIGHT_MIN = "height_min"
 CONF_HEIGHT_MAX = "height_max"
+CONF_USER_HEIGHT_MIN = "user_height_min"
+CONF_USER_HEIGHT_MAX = "user_height_max"
 CONF_CONTROLLER_CONNECTED = "controller_connected"
 
 # Settings
@@ -139,6 +141,18 @@ CONFIG_SCHEMA = cv.All(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             ),
             cv.Optional(CONF_HEIGHT_MAX): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CENTIMETER,
+                accuracy_decimals=1,
+                icon="mdi:arrow-collapse-up",
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Optional(CONF_USER_HEIGHT_MIN): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CENTIMETER,
+                accuracy_decimals=1,
+                icon="mdi:arrow-collapse-down",
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Optional(CONF_USER_HEIGHT_MAX): sensor.sensor_schema(
                 unit_of_measurement=UNIT_CENTIMETER,
                 accuracy_decimals=1,
                 icon="mdi:arrow-collapse-up",
@@ -267,6 +281,8 @@ async def to_code(config):
         (CONF_HEIGHT_PERCENT, "set_height_percent_sensor"),
         (CONF_HEIGHT_MIN, "set_height_min_sensor"),
         (CONF_HEIGHT_MAX, "set_height_max_sensor"),
+        (CONF_USER_HEIGHT_MIN, "set_user_min_sensor"),
+        (CONF_USER_HEIGHT_MAX, "set_user_max_sensor"),
     ):
         if key in config:
             sens = await sensor.new_sensor(config[key])

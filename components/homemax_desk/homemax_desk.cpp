@@ -20,7 +20,9 @@ static const uint8_t REQ_CMD_POLL = 0x20;
 // Controller message types
 static const uint8_t MSG_HEIGHT = 0x01;
 static const uint8_t MSG_LIMITS = 0x07;       // reply to 0x0C: max(2) min(2)
-static const uint8_t MSG_USER_LIMITS = 0x20;  // reply to 0x20
+static const uint8_t MSG_USER_LIMITS = 0x20;  // reply to 0x20: which user limits are set
+static const uint8_t MSG_USER_MAX = 0x21;     // user maximum height
+static const uint8_t MSG_USER_MIN = 0x22;     // user minimum height
 
 // The controller only keeps moving while commands keep arriving
 static const uint32_t SEND_INTERVAL_MS = 100;
@@ -49,7 +51,7 @@ void HomeMaxDesk::setup() {
   this->publish_standing_time_();
 
   // Ask for positions and limits once the controller had time to start
-  this->requests_ |= REQ_SETTINGS | REQ_LIMITS;
+  this->requests_ |= REQ_SETTINGS | REQ_LIMITS | REQ_POLL;
   this->settings_pending_ = false;
 }
 
@@ -78,9 +80,9 @@ void HomeMaxDesk::loop() {
       this->requests_ |= REQ_LIMITS;
   }
 
-  // 4. Keep-alive, so a disconnected controller is noticed
+  // 4. Read the user limits regularly; this also notices a disconnected controller
   if (this->poll_interval_ms_ > 0 && this->mode_ == Mode::IDLE &&
-      now - this->last_rx_ > this->poll_interval_ms_ && now - this->last_poll_ > this->poll_interval_ms_) {
+      now - this->last_poll_ > this->poll_interval_ms_) {
     this->last_poll_ = now;
     this->requests_ |= REQ_POLL;
   }
@@ -155,7 +157,8 @@ void HomeMaxDesk::dump_config() {
   ESP_LOGCONFIG(TAG, "  Stop early: %d mm", this->stop_early_);
   ESP_LOGCONFIG(TAG, "  Height range: %.1f - %.1f cm (%s)", this->min_height_ / 10.0f,
                 this->max_height_ / 10.0f,
-                this->limits_known_ ? "from controller" : (this->auto_limits_ ? "waiting for controller" : "configured"));
+                !this->auto_limits_ ? "configured"
+                                    : (this->limits_known_ ? "from controller" : "waiting for controller"));
   ESP_LOGCONFIG(TAG, "  Standing from: %.1f cm", this->standing_height_ / 10.0f);
   ESP_LOGCONFIG(TAG, "  Keep-alive: %u s", (unsigned) (this->poll_interval_ms_ / 1000));
   ESP_LOGCONFIG(TAG, "  Position commands: 0x%02X, 0x%02X", this->position_cmd_[0],
@@ -165,6 +168,8 @@ void HomeMaxDesk::dump_config() {
                 this->position_report_[1], this->position_report_[2], this->position_report_[3]);
   LOG_SENSOR("  ", "Height", this->height_sensor_);
   LOG_SENSOR("  ", "Height percent", this->height_percent_sensor_);
+  LOG_SENSOR("  ", "User minimum", this->user_min_sensor_);
+  LOG_SENSOR("  ", "User maximum", this->user_max_sensor_);
   LOG_SENSOR("  ", "Standing time", this->standing_time_sensor_);
   LOG_BINARY_SENSOR("  ", "Moving", this->moving_sensor_);
   LOG_BINARY_SENSOR("  ", "Standing", this->standing_sensor_);
@@ -231,13 +236,18 @@ void HomeMaxDesk::handle_frame_(uint8_t type, const uint8_t *data, uint8_t len) 
 
   // Physical limits: F2 F2 07 04 MAXH MAXL MINH MINL CS 7E
   if (type == MSG_LIMITS && len == 4) {
-    this->on_limits_((data[0] << 8) | data[1], (data[2] << 8) | data[3]);
+    this->on_physical_limits_((data[0] << 8) | data[1], (data[2] << 8) | data[3]);
     return;
   }
 
-  // User limits, also our keep-alive reply
-  if (type == MSG_USER_LIMITS) {
-    ESP_LOGV(TAG, "User limits reply (%u bytes)", len);
+  // User limits: F2 F2 20 01 FLAGS CS 7E, also our keep-alive reply
+  if (type == MSG_USER_LIMITS && len >= 1) {
+    this->on_user_limit_flags_(data[0]);
+    return;
+  }
+  // User maximum / minimum: F2 F2 21|22 02 HH LL CS 7E
+  if ((type == MSG_USER_MAX || type == MSG_USER_MIN) && len >= 2) {
+    this->on_user_limit_(type == MSG_USER_MAX, (data[0] << 8) | data[1]);
     return;
   }
 
@@ -283,24 +293,93 @@ void HomeMaxDesk::on_height_(int h) {
   this->publish_height_derived_();
 }
 
-void HomeMaxDesk::on_limits_(int max_h, int min_h) {
+void HomeMaxDesk::on_physical_limits_(int max_h, int min_h) {
   if (min_h <= 0 || max_h <= min_h) {
-    ESP_LOGW(TAG, "Ignoring implausible limits: min %d, max %d", min_h, max_h);
+    ESP_LOGW(TAG, "Ignoring implausible physical limits: min %d, max %d", min_h, max_h);
     return;
   }
-  ESP_LOGI(TAG, "Controller height range: %.1f - %.1f cm", min_h / 10.0f, max_h / 10.0f);
+  if (this->limits_known_ && min_h == this->physical_min_ && max_h == this->physical_max_)
+    return;
+  ESP_LOGI(TAG, "Physical height range: %.1f - %.1f cm", min_h / 10.0f, max_h / 10.0f);
+  this->limits_known_ = true;
+  this->physical_min_ = min_h;
+  this->physical_max_ = max_h;
+  this->apply_limits_();
+}
+
+// Reply to 0x20: which user limits are set.
+// Low nibble != 0: a maximum is set, high nibble != 0: a minimum is set.
+void HomeMaxDesk::on_user_limit_flags_(uint8_t flags) {
+  const bool max_set = (flags & 0x0F) != 0;
+  const bool min_set = (flags & 0xF0) != 0;
+  ESP_LOGV(TAG, "User limit flags 0x%02X (min %s, max %s)", flags, min_set ? "set" : "off",
+           max_set ? "set" : "off");
+
+  bool changed = false;
+  if (!max_set && this->user_max_ != -1) {
+    this->user_max_ = -1;
+    changed = true;
+  }
+  if (!min_set && this->user_min_ != -1) {
+    this->user_min_ = -1;
+    changed = true;
+  }
+  // Publish "not set" once, so the sensors don't stay unknown
+  if (!max_set && this->user_max_sensor_ != nullptr && !this->user_max_sensor_->has_state())
+    this->user_max_sensor_->publish_state(NAN);
+  if (!min_set && this->user_min_sensor_ != nullptr && !this->user_min_sensor_->has_state())
+    this->user_min_sensor_->publish_state(NAN);
+
+  if (changed) {
+    ESP_LOGI(TAG, "User height limit removed");
+    this->apply_limits_();
+  }
+}
+
+// 0x21: user maximum, 0x22: user minimum (height in mm)
+void HomeMaxDesk::on_user_limit_(bool is_max, int h) {
+  int &slot = is_max ? this->user_max_ : this->user_min_;
+  if (h <= 0 || h == slot)
+    return;
+  slot = h;
+  ESP_LOGI(TAG, "User height %s: %.1f cm", is_max ? "maximum" : "minimum", h / 10.0f);
+  this->apply_limits_();
+}
+
+// Work out the range the desk can actually use: user limits where set,
+// otherwise the physical limits, otherwise min_height / max_height.
+void HomeMaxDesk::apply_limits_() {
+  if (this->user_min_sensor_ != nullptr)
+    this->user_min_sensor_->publish_state(this->user_min_ > 0 ? this->user_min_ / 10.0f : NAN);
+  if (this->user_max_sensor_ != nullptr)
+    this->user_max_sensor_->publish_state(this->user_max_ > 0 ? this->user_max_ / 10.0f : NAN);
+
+  int min_h = this->config_min_, max_h = this->config_max_;
+  if (this->auto_limits_) {
+    if (this->physical_min_ > 0)
+      min_h = this->physical_min_;
+    if (this->physical_max_ > 0)
+      max_h = this->physical_max_;
+    if (this->user_min_ > 0)
+      min_h = this->user_min_;
+    if (this->user_max_ > 0)
+      max_h = this->user_max_;
+  }
+  if (max_h <= min_h) {
+    ESP_LOGW(TAG, "Inconsistent limits (%.1f - %.1f cm), keeping %.1f - %.1f cm", min_h / 10.0f,
+             max_h / 10.0f, this->min_height_ / 10.0f, this->max_height_ / 10.0f);
+    return;
+  }
+
+  this->min_height_ = min_h;
+  this->max_height_ = max_h;
+  ESP_LOGD(TAG, "Usable height range: %.1f - %.1f cm", min_h / 10.0f, max_h / 10.0f);
   if (this->height_min_sensor_ != nullptr)
     this->height_min_sensor_->publish_state(min_h / 10.0f);
   if (this->height_max_sensor_ != nullptr)
     this->height_max_sensor_->publish_state(max_h / 10.0f);
 
-  if (!this->auto_limits_)
-    return;
-  this->limits_known_ = true;
-  this->min_height_ = min_h;
-  this->max_height_ = max_h;
-
-  // Narrow the number entities to the real range. Home Assistant picks up
+  // Narrow the number entities to the usable range. Home Assistant picks up
   // the new range the next time it connects to the device.
   const float min_cm = min_h / 10.0f, max_cm = max_h / 10.0f;
   if (this->target_number_ != nullptr) {
@@ -458,7 +537,7 @@ void HomeMaxDesk::send_command(uint8_t cmd) {
 }
 
 void HomeMaxDesk::request_settings() {
-  this->requests_ |= REQ_SETTINGS;
+  this->requests_ |= REQ_SETTINGS | REQ_POLL;
   if (this->auto_limits_)
     this->requests_ |= REQ_LIMITS;
 }
@@ -479,7 +558,7 @@ void HomeMaxDesk::process_requests_(uint32_t now) {
     this->send_command(REQ_CMD_LIMITS);
   } else if (this->requests_ & REQ_POLL) {
     this->requests_ &= ~REQ_POLL;
-    ESP_LOGV(TAG, "Keep-alive");
+    ESP_LOGV(TAG, "Requesting user limits");
     this->send_command(REQ_CMD_POLL);
   }
 }
