@@ -23,8 +23,19 @@ static const uint32_t TARGET_TIMEOUT_MS = 30000;
 static const uint32_t WAKE_TIMEOUT_MS = 1500;
 // Let the desk settle after reaching a target before saving a position
 static const uint32_t SAVE_SETTLE_MS = 1000;
+// Desk counts as moving until the height has been stable this long
+static const uint32_t MOVING_HOLD_MS = 1000;
+// Hysteresis for the standing sensor (mm)
+static const int STANDING_HYSTERESIS = 10;
+// How often to publish the standing time while standing
+static const uint32_t STANDING_PUBLISH_MS = 60000;
 
-void HomeMaxDesk::setup() {}
+void HomeMaxDesk::setup() {
+  this->last_tick_ = millis();
+  if (this->moving_sensor_ != nullptr)
+    this->moving_sensor_->publish_initial_state(false);
+  this->publish_standing_time_();
+}
 
 void HomeMaxDesk::loop() {
   // 1. Read everything the controller sent
@@ -37,7 +48,11 @@ void HomeMaxDesk::loop() {
 
   const uint32_t now = millis();
 
-  // 2. Ask for the stored positions at startup and after every move,
+  // 2. Moving and standing state
+  this->update_moving_(now);
+  this->update_standing_(now);
+
+  // 3. Ask for the stored positions at startup and after every move,
   //    once the desk has been quiet for a moment
   if (this->mode_ == Mode::IDLE && this->settings_pending_ &&
       (int32_t) (now - this->settings_not_before_) >= 0 && now - this->last_change_ > 1000) {
@@ -45,7 +60,7 @@ void HomeMaxDesk::loop() {
     this->request_settings();
   }
 
-  // 3. Save a position once the desk has settled at its new height
+  // 4. Save a position once the desk has settled at its new height
   if (this->scheduled_save_ != 0 && this->mode_ == Mode::IDLE &&
       (int32_t) (now - this->save_at_) >= 0) {
     const uint8_t pos = this->scheduled_save_;
@@ -53,7 +68,7 @@ void HomeMaxDesk::loop() {
     this->save_position(pos);
   }
 
-  // 4. Keep sending movement commands while moving
+  // 5. Keep sending movement commands while moving
   if (this->mode_ == Mode::IDLE)
     return;
 
@@ -110,17 +125,25 @@ void HomeMaxDesk::dump_config() {
   ESP_LOGCONFIG(TAG, "HomeMax Desk:");
   ESP_LOGCONFIG(TAG, "  Move duration: %u ms", (unsigned) this->move_duration_);
   ESP_LOGCONFIG(TAG, "  Stop early: %d mm", this->stop_early_);
-  ESP_LOGCONFIG(TAG, "  Height limits: %.1f - %.1f cm", this->min_height_ / 10.0f,
+  ESP_LOGCONFIG(TAG, "  Height range: %.1f - %.1f cm", this->min_height_ / 10.0f,
                 this->max_height_ / 10.0f);
+  ESP_LOGCONFIG(TAG, "  Standing from: %.1f cm", this->standing_height_ / 10.0f);
   ESP_LOGCONFIG(TAG, "  Position commands: 0x%02X, 0x%02X", this->position_cmd_[0],
                 this->position_cmd_[1]);
+  ESP_LOGCONFIG(TAG, "  Save commands: 0x%02X, 0x%02X", this->save_cmd_[0], this->save_cmd_[1]);
   ESP_LOGCONFIG(TAG, "  Position reports: 0x%02X, 0x%02X", this->position_report_[0],
                 this->position_report_[1]);
-  ESP_LOGCONFIG(TAG, "  Save commands: 0x%02X, 0x%02X", this->save_cmd_[0], this->save_cmd_[1]);
   LOG_SENSOR("  ", "Height", this->height_sensor_);
   LOG_SENSOR("  ", "Position 1", this->position_sensor_[0]);
   LOG_SENSOR("  ", "Position 2", this->position_sensor_[1]);
+  LOG_SENSOR("  ", "Standing time", this->standing_time_sensor_);
+  LOG_BINARY_SENSOR("  ", "Moving", this->moving_sensor_);
+  LOG_BINARY_SENSOR("  ", "Standing", this->standing_sensor_);
 }
+
+// ---------------------------------------------------------------------------
+// Receiving
+// ---------------------------------------------------------------------------
 
 // Controller messages: F2 F2 TYPE LEN DATA[LEN] CS 7E
 // CS = (TYPE + LEN + DATA...) & 0xFF
@@ -171,15 +194,7 @@ void HomeMaxDesk::handle_byte_(uint8_t c) {
 void HomeMaxDesk::handle_frame_(uint8_t type, const uint8_t *data, uint8_t len) {
   // Current height: F2 F2 01 03 HH LL XX CS 7E (height in mm)
   if (type == 0x01 && len >= 2) {
-    const int h = (data[0] << 8) | data[1];
-    if (h == this->current_height_)
-      return;
-    this->current_height_ = h;
-    this->last_change_ = millis();
-    this->settings_pending_ = true;  // refresh positions after the move
-    ESP_LOGD(TAG, "Height: %.1f cm", h / 10.0f);
-    if (this->height_sensor_ != nullptr)
-      this->height_sensor_->publish_state(h / 10.0f);
+    this->on_height_((data[0] << 8) | data[1]);
     return;
   }
 
@@ -203,10 +218,122 @@ void HomeMaxDesk::handle_frame_(uint8_t type, const uint8_t *data, uint8_t len) 
   ESP_LOGD(TAG, "Message type 0x%02X, %u bytes: %s", type, len, hex);
 }
 
-void HomeMaxDesk::request_settings() {
-  ESP_LOGD(TAG, "Requesting settings");
-  this->send_command(0x07);
+void HomeMaxDesk::on_height_(int h) {
+  if (h == this->current_height_)
+    return;
+
+  const uint32_t now = millis();
+  if (this->current_height_ >= 0)
+    this->direction_ = h > this->current_height_ ? 1 : -1;
+  this->current_height_ = h;
+  this->last_change_ = now;
+  this->height_changed_at_ = now;
+  this->settings_pending_ = true;  // refresh positions after the move
+
+  ESP_LOGD(TAG, "Height: %.1f cm", h / 10.0f);
+  if (this->height_sensor_ != nullptr)
+    this->height_sensor_->publish_state(h / 10.0f);
+
+  this->update_moving_(now);
+  this->update_standing_(now);
+  this->publish_cover_();
 }
+
+// ---------------------------------------------------------------------------
+// Derived states
+// ---------------------------------------------------------------------------
+
+void HomeMaxDesk::update_moving_(uint32_t now) {
+  const bool height_changing =
+      this->current_height_ >= 0 && now - this->height_changed_at_ < MOVING_HOLD_MS;
+  const bool moving = this->mode_ != Mode::IDLE || height_changing;
+  if (moving == this->moving_)
+    return;
+
+  this->moving_ = moving;
+  if (!moving)
+    this->direction_ = 0;
+  ESP_LOGD(TAG, "Moving: %s", moving ? "yes" : "no");
+  if (this->moving_sensor_ != nullptr)
+    this->moving_sensor_->publish_state(moving);
+  this->publish_cover_();
+}
+
+void HomeMaxDesk::update_standing_(uint32_t now) {
+  // Count standing time
+  const uint32_t elapsed = now - this->last_tick_;
+  this->last_tick_ = now;
+  if (this->standing_)
+    this->standing_ms_ += elapsed;
+
+  if (this->standing_ && now - this->last_time_publish_ >= STANDING_PUBLISH_MS)
+    this->publish_standing_time_();
+
+  // Update the sitting/standing state with a little hysteresis
+  if (this->current_height_ < 0)
+    return;
+  bool standing = this->standing_;
+  if (this->current_height_ >= this->standing_height_) {
+    standing = true;
+  } else if (this->current_height_ < this->standing_height_ - STANDING_HYSTERESIS) {
+    standing = false;
+  }
+  if (standing == this->standing_ && this->standing_known_)
+    return;
+
+  this->standing_ = standing;
+  this->standing_known_ = true;
+  ESP_LOGD(TAG, "Posture: %s", standing ? "standing" : "sitting");
+  if (this->standing_sensor_ != nullptr)
+    this->standing_sensor_->publish_state(standing);
+  this->publish_standing_time_();
+}
+
+void HomeMaxDesk::publish_standing_time_() {
+  this->last_time_publish_ = millis();
+  if (this->standing_time_sensor_ != nullptr)
+    this->standing_time_sensor_->publish_state(this->standing_ms_ / 60000.0f);
+}
+
+void HomeMaxDesk::reset_standing_time() {
+  ESP_LOGI(TAG, "Resetting standing time (was %.1f min)", this->standing_ms_ / 60000.0f);
+  this->standing_ms_ = 0;
+  this->publish_standing_time_();
+}
+
+void HomeMaxDesk::publish_cover_() {
+  if (this->cover_ == nullptr || this->current_height_ < 0)
+    return;
+
+  const float range = (float) (this->max_height_ - this->min_height_);
+  float pos = range > 0 ? (this->current_height_ - this->min_height_) / range : 0.0f;
+  pos = clamp(pos, 0.0f, 1.0f);
+
+  cover::CoverOperation op = cover::COVER_OPERATION_IDLE;
+  if (this->moving_) {
+    int8_t dir = this->direction_;
+    if (this->mode_ == Mode::MANUAL_UP)
+      dir = 1;
+    else if (this->mode_ == Mode::MANUAL_DOWN)
+      dir = -1;
+    else if (this->mode_ == Mode::TARGET && this->current_height_ >= 0)
+      dir = this->target_ > this->current_height_ ? 1 : -1;
+    if (dir > 0)
+      op = cover::COVER_OPERATION_OPENING;
+    else if (dir < 0)
+      op = cover::COVER_OPERATION_CLOSING;
+  }
+
+  if (this->cover_->position == pos && this->cover_->current_operation == op)
+    return;
+  this->cover_->position = pos;
+  this->cover_->current_operation = op;
+  this->cover_->publish_state(false);
+}
+
+// ---------------------------------------------------------------------------
+// Sending
+// ---------------------------------------------------------------------------
 
 void HomeMaxDesk::send_(const uint8_t *cmd) { this->write_array(cmd, 6); }
 
@@ -215,13 +342,23 @@ void HomeMaxDesk::send_command(uint8_t cmd) {
   this->write_array(buf, sizeof(buf));
 }
 
+void HomeMaxDesk::request_settings() {
+  ESP_LOGD(TAG, "Requesting settings");
+  this->send_command(0x07);
+}
+
 void HomeMaxDesk::finish_(const char *reason) {
   this->send_(CMD_STOP);
   ESP_LOGI(TAG, "%s", reason);
   this->mode_ = Mode::IDLE;
   this->target_ = -1;
   this->pending_save_ = 0;
+  this->publish_cover_();
 }
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
 
 void HomeMaxDesk::move_up() {
   // Pressing again while already moving up extends the move
@@ -326,6 +463,10 @@ void HomeMaxDesk::set_position_height(uint8_t position, float cm) {
     this->pending_save_ = position;
 }
 
+// ---------------------------------------------------------------------------
+// Entities
+// ---------------------------------------------------------------------------
+
 void DeskButton::press_action() {
   switch (this->action_) {
     case ACTION_MOVE_UP:
@@ -363,6 +504,27 @@ void DeskHeightNumber::control(float value) {
 void DeskPositionNumber::control(float value) {
   // The state is published once the position is actually saved
   this->parent_->set_position_height(this->slot_, value);
+}
+
+cover::CoverTraits DeskCover::get_traits() {
+  auto traits = cover::CoverTraits();
+  traits.set_supports_position(true);
+  traits.set_supports_stop(true);
+  traits.set_is_assumed_state(false);
+  return traits;
+}
+
+void DeskCover::control(const cover::CoverCall &call) {
+  if (call.get_stop()) {
+    this->parent_->stop();
+    return;
+  }
+  if (call.get_position().has_value()) {
+    const float pos = *call.get_position();
+    const float min = this->parent_->get_min_height();
+    const float max = this->parent_->get_max_height();
+    this->parent_->goto_height(min + pos * (max - min));
+  }
 }
 
 }  // namespace homemax_desk

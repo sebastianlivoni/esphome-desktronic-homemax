@@ -24,6 +24,8 @@ logger:
 
 homemax_desk:
   id: desk
+
+  # Height and movement
   height:
     name: "Height"
   move_up:
@@ -32,6 +34,13 @@ homemax_desk:
     name: "Move down"
   stop:
     name: "Stop"
+  target_height:
+    name: "Target Height"
+    mode: box
+  cover:
+    name: "Desk"
+
+  # Memory positions
   position1:
     name: "Position 1"
   position2:
@@ -40,8 +49,6 @@ homemax_desk:
     name: "Position 1 Height"
   position2_height:
     name: "Position 2 Height"
-  refresh_positions:
-    name: "Refresh Positions"
   save_position1:
     name: "Save Current as Position 1"
   save_position2:
@@ -52,19 +59,35 @@ homemax_desk:
   set_position2:
     name: "Set Position 2"
     mode: box
-  target_height:
-    name: "Target Height"
-    mode: box
-  move_duration: 1s   # how long Move up / Move down move per press
-  stop_early: 5       # mm, stop this close to the target (desk coasts a bit)
-  min_height: 50      # cm, Target Height range
-  max_height: 140
-  position1_command: 0x05   # change if your controller uses other bytes
+  refresh_positions:
+    name: "Refresh Positions"
+
+  # Status
+  moving:
+    name: "Moving"
+    on_press:
+      - light.turn_on:
+          id: onboard_led
+          effect: "Moving Blink"
+    on_release:
+      - light.turn_off: onboard_led
+  standing:
+    name: "Standing"
+  standing_time:
+    name: "Standing Time Today"
+
+  # Settings
+  move_duration: 1s        # how long Move up / Move down move per press
+  stop_early: 5            # mm, stop this close to a target (desk coasts a bit)
+  min_height: 75           # cm, your desk's lowest height (0% for the cover)
+  max_height: 118          # cm, your desk's highest height (100% for the cover)
+  standing_height: 105      # cm, from this height on you count as standing
+  position1_command: 0x05  # change these if your controller uses other bytes
   position2_command: 0x06
-  position1_report: 0x25    # message type the controller uses to report them
-  position2_report: 0x26
   save_position1_command: 0x03
   save_position2_command: 0x04
+  position1_report: 0x25
+  position2_report: 0x26
 
 button:
   - platform: template
@@ -79,20 +102,36 @@ button:
     on_press:
       - lambda: "id(desk).goto_height(110);"
 
+# Time from Home Assistant, used to reset the standing time at midnight
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 0
+        then:
+          - lambda: "id(desk).reset_standing_time();"
+
+# Local control page at http://desktronic-homemax.local
+web_server:
+  port: 80
+  version: 3
+
 api:
   encryption:
-    key: "xWl/JiWZIUPF1svCeaWnYeCXLNqXBAziAZcJJu4zuCA="
+    key: !secret api_key
 
 ota:
   - platform: esphome
 
 wifi:
-  ssid: "IoT-2.4G"
-  password: "Pakke335"
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
   output_power: 8.5dB
   ap:
     ssid: "Livingroom Fallback Hotspot"
-    password: "jEjcOEjjRjeY"
+    password: !secret ap_password
 
 captive_portal:
 
@@ -104,5 +143,14 @@ output:
 
 light:
   - platform: binary
+    id: onboard_led
     name: "Onboard LED"
     output: led_out
+    effects:
+      - strobe:
+          name: "Moving Blink"
+          colors:
+            - state: true
+              duration: 200ms
+            - state: false
+              duration: 200ms
