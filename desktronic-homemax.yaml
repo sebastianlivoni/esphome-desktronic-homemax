@@ -50,24 +50,42 @@ homemax_desk:
   cover:
     name: "Desk"
 
-  # Memory positions
+  # Memory positions (the handset only has 1 and 2, the controller stores 4)
   position1:
     name: "Position 1"
   position2:
     name: "Position 2"
+  position3:
+    name: "Position 3"
+  position4:
+    name: "Position 4"
   position1_height:
     name: "Position 1 Height"
   position2_height:
     name: "Position 2 Height"
+  position3_height:
+    name: "Position 3 Height"
+  position4_height:
+    name: "Position 4 Height"
   save_position1:
     name: "Save Current as Position 1"
   save_position2:
     name: "Save Current as Position 2"
+  save_position3:
+    name: "Save Current as Position 3"
+  save_position4:
+    name: "Save Current as Position 4"
   set_position1:
     name: "Set Position 1"
     mode: box
   set_position2:
     name: "Set Position 2"
+    mode: box
+  set_position3:
+    name: "Set Position 3"
+    mode: box
+  set_position4:
+    name: "Set Position 4"
     mode: box
   refresh_positions:
     name: "Refresh Positions"

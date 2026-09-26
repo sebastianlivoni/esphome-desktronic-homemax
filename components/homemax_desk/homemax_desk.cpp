@@ -111,9 +111,10 @@ void HomeMaxDesk::dump_config() {
                                     : (this->limits_known_ ? "from controller" : "waiting for controller"));
   ESP_LOGCONFIG(TAG, "  Standing from: %.1f cm", this->standing_height_ / 10.0f);
   ESP_LOGCONFIG(TAG, "  Keep-alive: %u s", (unsigned) (this->poll_interval_ms_ / 1000));
-  ESP_LOGCONFIG(TAG, "  Position commands: 0x%02X, 0x%02X", this->position_cmd_[0],
-                this->position_cmd_[1]);
-  ESP_LOGCONFIG(TAG, "  Save commands: 0x%02X, 0x%02X", this->save_cmd_[0], this->save_cmd_[1]);
+  ESP_LOGCONFIG(TAG, "  Position commands: 0x%02X, 0x%02X, 0x%02X, 0x%02X", this->position_cmd_[0],
+                this->position_cmd_[1], this->position_cmd_[2], this->position_cmd_[3]);
+  ESP_LOGCONFIG(TAG, "  Save commands: 0x%02X, 0x%02X, 0x%02X, 0x%02X", this->save_cmd_[0],
+                this->save_cmd_[1], this->save_cmd_[2], this->save_cmd_[3]);
   ESP_LOGCONFIG(TAG, "  Position reports: 0x%02X, 0x%02X, 0x%02X, 0x%02X", this->position_report_[0],
                 this->position_report_[1], this->position_report_[2], this->position_report_[3]);
   LOG_SENSOR("  ", "Height", this->height_sensor_);
@@ -207,9 +208,9 @@ void HomeMaxDesk::handle_frame_(uint8_t type, const uint8_t *data, uint8_t len) 
       const int h = (data[0] << 8) | data[1];
       ESP_LOGD(TAG, "Position %u: %.1f cm", i + 1, h / 10.0f);
       const float value = h > 0 ? h / 10.0f : NAN;
-      if (i < NUM_CONTROLLABLE && this->position_sensor_[i] != nullptr)
+      if (this->position_sensor_[i] != nullptr)
         this->position_sensor_[i]->publish_state(value);
-      if (i < NUM_CONTROLLABLE && this->position_number_[i] != nullptr && h > 0)
+      if (this->position_number_[i] != nullptr && h > 0)
         this->position_number_[i]->publish_state(value);
       return;
     }
@@ -604,7 +605,7 @@ void HomeMaxDesk::goto_height(float cm) {
 }
 
 void HomeMaxDesk::goto_position(uint8_t position) {
-  if (position < 1 || position > NUM_CONTROLLABLE) {
+  if (position < 1 || position > NUM_POSITIONS) {
     ESP_LOGW(TAG, "Unknown position %u", position);
     return;
   }
@@ -618,7 +619,7 @@ void HomeMaxDesk::goto_position(uint8_t position) {
 }
 
 void HomeMaxDesk::save_position(uint8_t position) {
-  if (position < 1 || position > NUM_CONTROLLABLE) {
+  if (position < 1 || position > NUM_POSITIONS) {
     ESP_LOGW(TAG, "Unknown position %u", position);
     return;
   }
@@ -645,7 +646,7 @@ void HomeMaxDesk::save_position(uint8_t position) {
 }
 
 void HomeMaxDesk::set_position_height(uint8_t position, float cm) {
-  if (position < 1 || position > NUM_CONTROLLABLE) {
+  if (position < 1 || position > NUM_POSITIONS) {
     ESP_LOGW(TAG, "Unknown position %u", position);
     return;
   }
@@ -667,20 +668,14 @@ void DeskButton::press_action() {
     case ACTION_MOVE_DOWN:
       this->parent_->move_down();
       break;
-    case ACTION_POSITION1:
-      this->parent_->goto_position(1);
-      break;
-    case ACTION_POSITION2:
-      this->parent_->goto_position(2);
+    case ACTION_GOTO_POSITION:
+      this->parent_->goto_position(this->slot_);
       break;
     case ACTION_REFRESH_POSITIONS:
       this->parent_->request_settings();
       break;
-    case ACTION_SAVE_POSITION1:
-      this->parent_->save_position(1);
-      break;
-    case ACTION_SAVE_POSITION2:
-      this->parent_->save_position(2);
+    case ACTION_SAVE_POSITION:
+      this->parent_->save_position(this->slot_);
       break;
     default:
       this->parent_->stop();

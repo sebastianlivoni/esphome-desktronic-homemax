@@ -23,15 +23,7 @@ CONF_MOVE_UP = "move_up"
 CONF_MOVE_DOWN = "move_down"
 CONF_STOP = "stop"
 CONF_TARGET_HEIGHT = "target_height"
-CONF_POSITION1 = "position1"
-CONF_POSITION2 = "position2"
-CONF_POSITION1_HEIGHT = "position1_height"
-CONF_POSITION2_HEIGHT = "position2_height"
 CONF_REFRESH_POSITIONS = "refresh_positions"
-CONF_SAVE_POSITION1 = "save_position1"
-CONF_SAVE_POSITION2 = "save_position2"
-CONF_SET_POSITION1 = "set_position1"
-CONF_SET_POSITION2 = "set_position2"
 CONF_MOVING = "moving"
 CONF_STANDING = "standing"
 CONF_STANDING_TIME = "standing_time"
@@ -47,27 +39,14 @@ CONF_CONTROLLER_CONNECTED = "controller_connected"
 CONF_MIN_HEIGHT = "min_height"
 CONF_MAX_HEIGHT = "max_height"
 CONF_STANDING_HEIGHT = "standing_height"
-CONF_POSITION1_COMMAND = "position1_command"
-CONF_POSITION2_COMMAND = "position2_command"
-CONF_SAVE_POSITION1_COMMAND = "save_position1_command"
-CONF_SAVE_POSITION2_COMMAND = "save_position2_command"
-CONF_POSITION1_REPORT = "position1_report"
-CONF_POSITION2_REPORT = "position2_report"
-CONF_POSITION3_REPORT = "position3_report"
-CONF_POSITION4_REPORT = "position4_report"
 CONF_AUTO_LIMITS = "auto_limits"
 CONF_POLL_INTERVAL = "poll_interval"
 
-POSITION_SENSORS = {
-    CONF_POSITION1_HEIGHT: 1,
-    CONF_POSITION2_HEIGHT: 2,
-}
-POSITION_REPORTS = {
-    CONF_POSITION1_REPORT: 1,
-    CONF_POSITION2_REPORT: 2,
-    CONF_POSITION3_REPORT: 3,
-    CONF_POSITION4_REPORT: 4,
-}
+# Memory positions 1-4: entity keys and default command / report bytes
+POSITIONS = (1, 2, 3, 4)
+DEFAULT_POSITION_COMMANDS = {1: 0x05, 2: 0x06, 3: 0x27, 4: 0x28}
+DEFAULT_SAVE_COMMANDS = {1: 0x03, 2: 0x04, 3: 0x25, 4: 0x26}
+DEFAULT_POSITION_REPORTS = {1: 0x25, 2: 0x26, 3: 0x27, 4: 0x28}
 
 homemax_ns = cg.esphome_ns.namespace("homemax_desk")
 HomeMaxDesk = homemax_ns.class_("HomeMaxDesk", cg.Component, uart.UARTDevice)
@@ -77,21 +56,23 @@ DeskPositionNumber = homemax_ns.class_("DeskPositionNumber", number.Number)
 DeskCover = homemax_ns.class_("DeskCover", cover.Cover)
 
 # Must match the ButtonAction values in homemax_desk.h
-BUTTON_ACTIONS = {
-    CONF_MOVE_UP: 0,
-    CONF_MOVE_DOWN: 1,
-    CONF_STOP: 2,
-    CONF_POSITION1: 3,
-    CONF_POSITION2: 4,
-    CONF_REFRESH_POSITIONS: 5,
-    CONF_SAVE_POSITION1: 6,
-    CONF_SAVE_POSITION2: 7,
-}
+ACTION_MOVE_UP = 0
+ACTION_MOVE_DOWN = 1
+ACTION_STOP = 2
+ACTION_GOTO_POSITION = 3
+ACTION_SAVE_POSITION = 4
+ACTION_REFRESH_POSITIONS = 5
 
-POSITION_NUMBERS = {
-    CONF_SET_POSITION1: 1,
-    CONF_SET_POSITION2: 2,
+# key -> (action, slot)
+BUTTON_ACTIONS = {
+    CONF_MOVE_UP: (ACTION_MOVE_UP, 0),
+    CONF_MOVE_DOWN: (ACTION_MOVE_DOWN, 0),
+    CONF_STOP: (ACTION_STOP, 0),
+    CONF_REFRESH_POSITIONS: (ACTION_REFRESH_POSITIONS, 0),
 }
+for _n in POSITIONS:
+    BUTTON_ACTIONS[f"position{_n}"] = (ACTION_GOTO_POSITION, _n)
+    BUTTON_ACTIONS[f"save_position{_n}"] = (ACTION_SAVE_POSITION, _n)
 
 
 def _height_sensor(icon):
@@ -105,6 +86,33 @@ def _height_sensor(icon):
 
 def _height_number(class_, icon):
     return number.number_schema(class_, unit_of_measurement=UNIT_CENTIMETER, icon=icon)
+
+
+def _position_schema():
+    schema = {}
+    for n in POSITIONS:
+        schema[cv.Optional(f"position{n}")] = button.button_schema(
+            DeskButton, icon=f"mdi:numeric-{n}-box"
+        )
+        schema[cv.Optional(f"position{n}_height")] = _height_sensor(
+            f"mdi:numeric-{n}-box-outline"
+        )
+        schema[cv.Optional(f"save_position{n}")] = button.button_schema(
+            DeskButton, icon="mdi:content-save"
+        )
+        schema[cv.Optional(f"set_position{n}")] = _height_number(
+            DeskPositionNumber, f"mdi:numeric-{n}-box-multiple-outline"
+        )
+        schema[
+            cv.Optional(f"position{n}_command", default=DEFAULT_POSITION_COMMANDS[n])
+        ] = cv.hex_uint8_t
+        schema[
+            cv.Optional(f"save_position{n}_command", default=DEFAULT_SAVE_COMMANDS[n])
+        ] = cv.hex_uint8_t
+        schema[
+            cv.Optional(f"position{n}_report", default=DEFAULT_POSITION_REPORTS[n])
+        ] = cv.hex_uint8_t
+    return schema
 
 
 def _validate_heights(config):
@@ -162,31 +170,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_COVER): cover.cover_schema(
                 DeskCover, icon="mdi:desk"
             ),
-            # Memory positions
-            cv.Optional(CONF_POSITION1): button.button_schema(
-                DeskButton, icon="mdi:numeric-1-box"
-            ),
-            cv.Optional(CONF_POSITION2): button.button_schema(
-                DeskButton, icon="mdi:numeric-2-box"
-            ),
-            cv.Optional(CONF_POSITION1_HEIGHT): _height_sensor(
-                "mdi:numeric-1-box-outline"
-            ),
-            cv.Optional(CONF_POSITION2_HEIGHT): _height_sensor(
-                "mdi:numeric-2-box-outline"
-            ),
-            cv.Optional(CONF_SAVE_POSITION1): button.button_schema(
-                DeskButton, icon="mdi:content-save"
-            ),
-            cv.Optional(CONF_SAVE_POSITION2): button.button_schema(
-                DeskButton, icon="mdi:content-save"
-            ),
-            cv.Optional(CONF_SET_POSITION1): _height_number(
-                DeskPositionNumber, "mdi:numeric-1-box-multiple-outline"
-            ),
-            cv.Optional(CONF_SET_POSITION2): _height_number(
-                DeskPositionNumber, "mdi:numeric-2-box-multiple-outline"
-            ),
+            # Memory positions (positions 1-4 are added below)
             cv.Optional(CONF_REFRESH_POSITIONS): button.button_schema(
                 DeskButton, icon="mdi:refresh"
             ),
@@ -218,16 +202,9 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_STANDING_HEIGHT, default=95.0): cv.float_range(
                 min=0, max=300
             ),
-            cv.Optional(CONF_POSITION1_COMMAND, default=0x05): cv.hex_uint8_t,
-            cv.Optional(CONF_POSITION2_COMMAND, default=0x06): cv.hex_uint8_t,
-            cv.Optional(CONF_SAVE_POSITION1_COMMAND, default=0x03): cv.hex_uint8_t,
-            cv.Optional(CONF_SAVE_POSITION2_COMMAND, default=0x04): cv.hex_uint8_t,
-            cv.Optional(CONF_POSITION1_REPORT, default=0x25): cv.hex_uint8_t,
-            cv.Optional(CONF_POSITION2_REPORT, default=0x26): cv.hex_uint8_t,
-            cv.Optional(CONF_POSITION3_REPORT, default=0x27): cv.hex_uint8_t,
-            cv.Optional(CONF_POSITION4_REPORT, default=0x28): cv.hex_uint8_t,
         }
     )
+    .extend(_position_schema())
     .extend(cv.COMPONENT_SCHEMA)
     .extend(uart.UART_DEVICE_SCHEMA),
     _validate_heights,
@@ -246,29 +223,21 @@ async def to_code(config):
     # Settings
     cg.add(var.set_height_limits(config[CONF_MIN_HEIGHT], config[CONF_MAX_HEIGHT]))
     cg.add(var.set_standing_height(config[CONF_STANDING_HEIGHT]))
-    cg.add(
-        var.set_position_commands(
-            config[CONF_POSITION1_COMMAND], config[CONF_POSITION2_COMMAND]
-        )
-    )
-    cg.add(
-        var.set_save_commands(
-            config[CONF_SAVE_POSITION1_COMMAND], config[CONF_SAVE_POSITION2_COMMAND]
-        )
-    )
     cg.add(var.set_auto_limits(config[CONF_AUTO_LIMITS]))
     cg.add(var.set_poll_interval(config[CONF_POLL_INTERVAL]))
-    for key, slot in POSITION_REPORTS.items():
-        cg.add(var.set_position_report(slot, config[key]))
+    for n in POSITIONS:
+        cg.add(var.set_position_command(n, config[f"position{n}_command"]))
+        cg.add(var.set_save_command(n, config[f"save_position{n}_command"]))
+        cg.add(var.set_position_report(n, config[f"position{n}_report"]))
 
     # Sensors
     if CONF_HEIGHT in config:
         sens = await sensor.new_sensor(config[CONF_HEIGHT])
         cg.add(var.set_height_sensor(sens))
-    for key, slot in POSITION_SENSORS.items():
-        if key in config:
+    for n in POSITIONS:
+        if (key := f"position{n}_height") in config:
             sens = await sensor.new_sensor(config[key])
-            cg.add(var.set_position_sensor(slot, sens))
+            cg.add(var.set_position_sensor(n, sens))
     for key, setter in (
         (CONF_HEIGHT_PERCENT, "set_height_percent_sensor"),
         (CONF_HEIGHT_MIN, "set_height_min_sensor"),
@@ -295,11 +264,12 @@ async def to_code(config):
         cg.add(var.set_connected_sensor(bs))
 
     # Buttons
-    for key, action in BUTTON_ACTIONS.items():
+    for key, (action, slot) in BUTTON_ACTIONS.items():
         if key in config:
             btn = await button.new_button(config[key])
             cg.add(btn.set_parent(var))
             cg.add(btn.set_action(action))
+            cg.add(btn.set_slot(slot))
 
     # Numbers
     if CONF_TARGET_HEIGHT in config:
@@ -312,8 +282,8 @@ async def to_code(config):
         cg.add(num.set_parent(var))
         cg.add(var.set_target_number(num))
 
-    for key, slot in POSITION_NUMBERS.items():
-        if key in config:
+    for slot in POSITIONS:
+        if (key := f"set_position{slot}") in config:
             num = await number.new_number(
                 config[key],
                 min_value=config[CONF_MIN_HEIGHT],

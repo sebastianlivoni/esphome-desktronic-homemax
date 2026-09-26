@@ -17,15 +17,14 @@ enum ButtonAction : uint8_t {
   ACTION_MOVE_UP = 0,
   ACTION_MOVE_DOWN = 1,
   ACTION_STOP = 2,
-  ACTION_POSITION1 = 3,
-  ACTION_POSITION2 = 4,
+  ACTION_GOTO_POSITION = 3,  // uses the button's slot
+  ACTION_SAVE_POSITION = 4,  // uses the button's slot
   ACTION_REFRESH_POSITIONS = 5,
-  ACTION_SAVE_POSITION1 = 6,
-  ACTION_SAVE_POSITION2 = 7,
 };
 
-static const uint8_t NUM_POSITIONS = 4;     // positions the controller reports (3-4 only logged)
-static const uint8_t NUM_CONTROLLABLE = 2;  // positions with entities and go-to/save commands
+// Memory slots in the controller. The HomeMax handset only has buttons for
+// 1 and 2, but the controller stores four.
+static const uint8_t NUM_POSITIONS = 4;
 
 class HomeMaxDesk : public Component, public uart::UARTDevice {
  public:
@@ -43,11 +42,11 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void set_user_max_sensor(sensor::Sensor *s) { this->user_max_sensor_ = s; }
   void set_target_number(number::Number *n) { this->target_number_ = n; }
   void set_position_sensor(uint8_t slot, sensor::Sensor *s) {
-    if (slot >= 1 && slot <= NUM_CONTROLLABLE)
+    if (slot >= 1 && slot <= NUM_POSITIONS)
       this->position_sensor_[slot - 1] = s;
   }
   void set_position_number(uint8_t slot, number::Number *n) {
-    if (slot >= 1 && slot <= NUM_CONTROLLABLE)
+    if (slot >= 1 && slot <= NUM_POSITIONS)
       this->position_number_[slot - 1] = n;
   }
   void set_position_report(uint8_t slot, uint8_t type) {
@@ -67,13 +66,13 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   }
   void set_auto_limits(bool a) { this->auto_limits_ = a; }
   void set_poll_interval(uint32_t ms) { this->poll_interval_ms_ = ms; }
-  void set_position_commands(uint8_t pos1, uint8_t pos2) {
-    this->position_cmd_[0] = pos1;
-    this->position_cmd_[1] = pos2;
+  void set_position_command(uint8_t slot, uint8_t cmd) {
+    if (slot >= 1 && slot <= NUM_POSITIONS)
+      this->position_cmd_[slot - 1] = cmd;
   }
-  void set_save_commands(uint8_t pos1, uint8_t pos2) {
-    this->save_cmd_[0] = pos1;
-    this->save_cmd_[1] = pos2;
+  void set_save_command(uint8_t slot, uint8_t cmd) {
+    if (slot >= 1 && slot <= NUM_POSITIONS)
+      this->save_cmd_[slot - 1] = cmd;
   }
 
   // ---- Actions (also usable from lambdas, e.g. id(desk).goto_height(80);) ----
@@ -81,11 +80,11 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void move_down();
   void stop();
   void goto_height(float cm);
-  // Go to a memory position stored in the controller (1 or 2)
+  // Go to a memory position stored in the controller (1-4)
   void goto_position(uint8_t position);
-  // Save the current height as memory position 1 or 2
+  // Save the current height as memory position 1-4
   void save_position(uint8_t position);
-  // Move to a height, then save it as memory position 1 or 2
+  // Move to a height, then save it as memory position 1-4
   void set_position_height(uint8_t position, float cm);
   // Ask the controller for its stored positions and height limits
   void request_settings();
@@ -146,8 +145,8 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   sensor::Sensor *user_min_sensor_{nullptr};
   sensor::Sensor *user_max_sensor_{nullptr};
   number::Number *target_number_{nullptr};
-  sensor::Sensor *position_sensor_[NUM_CONTROLLABLE]{};
-  number::Number *position_number_[NUM_CONTROLLABLE]{};
+  sensor::Sensor *position_sensor_[NUM_POSITIONS]{};
+  number::Number *position_number_[NUM_POSITIONS]{};
   binary_sensor::BinarySensor *moving_sensor_{nullptr};
   binary_sensor::BinarySensor *standing_sensor_{nullptr};
   binary_sensor::BinarySensor *connected_sensor_{nullptr};
@@ -167,8 +166,8 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   int config_max_{1400};
   int standing_height_{950};
   uint32_t poll_interval_ms_{60000};
-  uint8_t position_cmd_[NUM_CONTROLLABLE]{0x05, 0x06};
-  uint8_t save_cmd_[NUM_CONTROLLABLE]{0x03, 0x04};
+  uint8_t position_cmd_[NUM_POSITIONS]{0x05, 0x06, 0x27, 0x28};
+  uint8_t save_cmd_[NUM_POSITIONS]{0x03, 0x04, 0x25, 0x26};
   uint8_t position_report_[NUM_POSITIONS]{0x25, 0x26, 0x27, 0x28};
 
   // Movement
@@ -212,10 +211,12 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
 class DeskButton : public button::Button, public Parented<HomeMaxDesk> {
  public:
   void set_action(uint8_t action) { this->action_ = action; }
+  void set_slot(uint8_t slot) { this->slot_ = slot; }
 
  protected:
   void press_action() override;
   uint8_t action_{ACTION_STOP};
+  uint8_t slot_{0};
 };
 
 class DeskHeightNumber : public number::Number, public Parented<HomeMaxDesk> {
