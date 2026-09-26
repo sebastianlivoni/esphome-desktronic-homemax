@@ -75,12 +75,6 @@ homemax_desk:
   # Status
   moving:
     name: "Moving"
-    on_press:
-      - light.turn_on:
-          id: onboard_led
-          effect: "Moving Blink"
-    on_release:
-      - light.turn_off: onboard_led
   standing:
     name: "Standing"
   standing_time:
@@ -142,23 +136,3 @@ wifi:
     password: !secret ap_password
 
 captive_portal:
-
-output:
-  - platform: gpio
-    pin: GPIO8
-    id: led_out
-    inverted: true
-
-light:
-  - platform: binary
-    id: onboard_led
-    name: "Onboard LED"
-    output: led_out
-    effects:
-      - strobe:
-          name: "Moving Blink"
-          colors:
-            - state: true
-              duration: 200ms
-            - state: false
-              duration: 200ms
