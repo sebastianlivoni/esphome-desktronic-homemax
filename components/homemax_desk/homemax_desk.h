@@ -60,8 +60,6 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void set_standing_time_sensor(sensor::Sensor *s) { this->standing_time_sensor_ = s; }
   void set_cover(cover::Cover *c) { this->cover_ = c; }
 
-  void set_move_duration(uint32_t ms) { this->move_duration_ = ms; }
-  void set_stop_early(int mm) { this->stop_early_ = mm; }
   void set_standing_height(float cm) { this->standing_height_ = (int) (cm * 10 + 0.5f); }
   void set_height_limits(float min_cm, float max_cm) {
     this->config_min_ = this->min_height_ = (int) (min_cm * 10 + 0.5f);
@@ -110,7 +108,8 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   float get_standing_minutes() const { return this->standing_ms_ / 60000.0f; }
 
  protected:
-  enum class Mode : uint8_t { IDLE, MANUAL_UP, MANUAL_DOWN, TARGET };
+  // GOTO: the controller moves to target_ by itself, we only watch the height
+  enum class Mode : uint8_t { IDLE, GOTO };
 
   // Requests to the controller, sent one at a time while idle
   enum Request : uint8_t {
@@ -135,6 +134,9 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void publish_cover_();
   void send_(const uint8_t *cmd);
   void finish_(const char *reason);
+  void check_goto_(uint32_t now);
+  void end_goto_(bool reached, const char *reason);
+  void send_goto_(int target_mm);
 
   // Entities
   sensor::Sensor *height_sensor_{nullptr};
@@ -153,8 +155,6 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   cover::Cover *cover_{nullptr};
 
   // Settings
-  uint32_t move_duration_{1000};
-  int stop_early_{5};
   int min_height_{500};
   int max_height_{1400};
   bool auto_limits_{true};
@@ -176,12 +176,9 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   int current_height_{-1};  // mm, -1 = unknown
   int target_{-1};          // mm
   uint32_t mode_start_{0};
-  uint32_t manual_until_{0};
-  uint32_t last_change_{0};        // for the go-to-height safety stop
+  uint32_t last_change_{0};        // for detecting a stopped move
   uint32_t height_changed_at_{0};  // last actual height change
   int8_t direction_{0};            // +1 up, -1 down, from height changes
-  uint32_t last_send_{0};
-  bool send_now_{false};
   bool moving_{false};
 
   // Requests and positions

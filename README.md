@@ -8,8 +8,8 @@ The HomeMax uses a Jiecang controller that talks serial (UART) at 9600 baud. Thi
 
 - **Height sensor**, updated whenever the desk moves, including when you use the handset
 - **Height range read from the controller**, including user height limits set with the handset, plus height in percent
-- **Move up / Move down / Stop** buttons
-- **Go to height**: type a height in cm and the desk moves there, with safety stops
+- **Move up / Move down / Stop** buttons: the desk moves all the way until it reaches the end or you press Stop
+- **Go to height**: type a height in cm and the controller moves the desk there by itself
 - **Memory positions 1 and 2**: go to them, see their stored heights, save the current height, or set a new height directly
 - **Cover entity**: the desk shows up like a blind in Home Assistant, with a 0–100% slider and voice assistant support
 - **Moving** and **Standing** binary sensors
@@ -104,8 +104,8 @@ Every entity is optional. Add only the ones you want.
 | `height_percent` | sensor | Height in % of the desk's range |
 | `height_min`, `height_max` | sensor | Usable height range: the user limits where set, otherwise the physical range |
 | `user_height_min`, `user_height_max` | sensor | User height limits set with the handset (empty if not set) |
-| `move_up` | button | Move up for `move_duration` |
-| `move_down` | button | Move down for `move_duration` |
+| `move_up` | button | Move all the way up, until the top or Stop |
+| `move_down` | button | Move all the way down, until the bottom or Stop |
 | `stop` | button | Stop any movement |
 | `target_height` | number | Move to a height in cm |
 | `cover` | cover | The desk as a cover: 0% = `min_height`, 100% = `max_height` |
@@ -123,8 +123,6 @@ Every entity is optional. Add only the ones you want.
 
 | Key | Default | Description |
 |---|---|---|
-| `move_duration` | `1s` | How long Move up / Move down move per press. Pressing again during a move extends it. |
-| `stop_early` | `5` | Stop this many mm before a target, because the desk coasts a little after stopping |
 | `auto_limits` | `true` | Read the height range and user limits from the controller |
 | `min_height` | `50` | Lowest height in cm, used until the controller reports its range (or always, with `auto_limits: false`) |
 | `max_height` | `140` | Highest height in cm, as above |
@@ -163,7 +161,7 @@ For template buttons, scripts, and automations:
 
 | Function | Description |
 |---|---|
-| `id(desk).move_up()` / `move_down()` | Move for `move_duration` |
+| `id(desk).move_up()` / `move_down()` | Move all the way up / down |
 | `id(desk).stop()` | Stop any movement |
 | `id(desk).goto_height(80)` | Move to 80 cm |
 | `id(desk).goto_position(1)` | Go to memory position 1 or 2 |
@@ -221,13 +219,19 @@ F2 F2 01 03 02 EE 07 FB 7E
          └────────── type 0x01: current height
 ```
 
-### Continuous movement
+### Moving the desk
 
-The HomeMax controller only keeps moving while movement commands keep arriving, just like when you hold a button on the handset. A single "up" command barely moves the desk. So Move up, Move down, and go-to-height repeat the command every 100 ms and send Stop at the end.
+The controller has a go-to-height command:
 
-Go-to-height keeps moving toward the target while reading the height reports, and stops when the desk is within `stop_early` mm of the target. For safety, it also stops if the height stops changing for 3 seconds (for example at a limit) or after 30 seconds.
+```
+F1 F1 1B 02 HH LL CS 7E     (height in mm, e.g. 03 20 = 80.0 cm)
+```
 
-Because the controller is silent when idle, the component doesn't know the height right after startup. The first go-to-height command nudges the desk briefly to get a reading.
+With it, the controller moves the desk to the height by itself and stops there. Target Height, Set Position, the cover and the lambda `goto_height()` all use it. Move up and Move down send it with the top or bottom of the usable range, so the desk moves all the way until it gets there or you press Stop. The component only watches the height reports to know when the desk has arrived. As a safety net, it sends Stop if a move takes longer than 60 seconds.
+
+The plain Up (`0x01`) and Down (`0x02`) commands work differently: the controller only keeps moving while they keep arriving, like holding a handset button, and a single command barely moves the desk. The component doesn't use them.
+
+Because the controller is silent when idle, the component doesn't know the height right after startup. It learns it as soon as the desk moves.
 
 ### Verified and unverified commands
 
@@ -236,6 +240,7 @@ Verified on a HomeMax with a JCP35N12 controller:
 | Direction | Bytes | Meaning |
 |---|---|---|
 | to controller | `0x01`, `0x02`, `0x2B` | Up, Down, Stop |
+| to controller | `0x1B` + 2 bytes | Go to height (mm) |
 | to controller | `0x07` | Request stored positions |
 | to controller | `0x0C` | Request physical height limits |
 | to controller | `0x20` | Request user limits |
@@ -259,7 +264,7 @@ The component logs every message it doesn't recognize at DEBUG level, for exampl
 
 **The Height sensor stays empty.** The controller only reports while the desk moves. Move it once with the handset. If it's still empty, the controller's TX line isn't reaching the ESP32's RX pin: check the wiring, the shared ground, and whether TX and RX are swapped.
 
-**Height works, but the desk doesn't move.** The ESP32's TX line isn't reaching the controller's RX pin. Check that wire, and try swapping the two data wires on the level converter.
+**Height works, but the desk doesn't move.** The ESP32's TX line isn't reaching the controller's RX pin. Check that wire, and try swapping the two data wires on the level converter. This component needs a controller that supports go-to-height (`0x1B`). To test it, send `F1 F1 1B 02 03 20 40 7E` (go to 80 cm) with a template button and `uart.write`.
 
 **The ESP32 powers up from the desk but WiFi doesn't connect.** The desk's 5 V can't supply enough current. Power the ESP32 over USB instead.
 

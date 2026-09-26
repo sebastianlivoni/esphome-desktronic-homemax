@@ -10,9 +10,8 @@ namespace homemax_desk {
 static const char *const TAG = "homemax_desk";
 
 // Commands verified on the Desktronic HomeMax (JCP35N12 controller)
-static const uint8_t CMD_UP[] = {0xF1, 0xF1, 0x01, 0x00, 0x01, 0x7E};
-static const uint8_t CMD_DOWN[] = {0xF1, 0xF1, 0x02, 0x00, 0x02, 0x7E};
 static const uint8_t CMD_STOP[] = {0xF1, 0xF1, 0x2B, 0x00, 0x2B, 0x7E};
+static const uint8_t CMD_GOTO_HEIGHT = 0x1B;  // + 2 bytes height in mm, verified
 static const uint8_t REQ_CMD_SETTINGS = 0x07;
 static const uint8_t REQ_CMD_LIMITS = 0x0C;
 static const uint8_t REQ_CMD_POLL = 0x20;
@@ -24,13 +23,14 @@ static const uint8_t MSG_USER_LIMITS = 0x20;  // reply to 0x20: which user limit
 static const uint8_t MSG_USER_MAX = 0x21;     // user maximum height
 static const uint8_t MSG_USER_MIN = 0x22;     // user minimum height
 
-// The controller only keeps moving while commands keep arriving
-static const uint32_t SEND_INTERVAL_MS = 100;
-// Safety limits for go-to-height
+// A move counts as ended when the height hasn't changed for this long
 static const uint32_t NO_CHANGE_TIMEOUT_MS = 3000;
-static const uint32_t TARGET_TIMEOUT_MS = 30000;
-// How long to wait for a height reading after the wake-up nudge
-static const uint32_t WAKE_TIMEOUT_MS = 1500;
+// A move counts as reached within this distance of the target...
+static const int GOTO_TOLERANCE_MM = 10;
+// ...once the height has been stable this long
+static const uint32_t GOTO_SETTLE_MS = 500;
+// Longest full travel is ~15 s; give up (and send Stop) after this
+static const uint32_t GOTO_TIMEOUT_MS = 60000;
 // Let the desk settle after reaching a target before saving a position
 static const uint32_t SAVE_SETTLE_MS = 1000;
 // Desk counts as moving until the height has been stable this long
@@ -98,63 +98,13 @@ void HomeMaxDesk::loop() {
     this->save_position(pos);
   }
 
-  // 7. Keep sending movement commands while moving
-  if (this->mode_ == Mode::IDLE)
-    return;
-
-  if (!this->send_now_ && now - this->last_send_ < SEND_INTERVAL_MS)
-    return;
-  this->send_now_ = false;
-  this->last_send_ = now;
-
-  switch (this->mode_) {
-    case Mode::MANUAL_UP:
-    case Mode::MANUAL_DOWN:
-      if ((int32_t) (now - this->manual_until_) >= 0) {
-        this->finish_("Manual move finished");
-        return;
-      }
-      this->send_(this->mode_ == Mode::MANUAL_UP ? CMD_UP : CMD_DOWN);
-      break;
-
-    case Mode::TARGET: {
-      if (this->current_height_ < 0) {
-        // Waiting for the first height reading after the nudge
-        if (now - this->mode_start_ > WAKE_TIMEOUT_MS)
-          this->finish_("No height received from controller, cancelled");
-        return;
-      }
-      const int diff = this->target_ - this->current_height_;
-      if (std::abs(diff) <= this->stop_early_) {
-        const uint8_t save = this->pending_save_;
-        this->finish_("Target height reached");
-        if (save != 0) {
-          this->scheduled_save_ = save;
-          this->save_at_ = now + SAVE_SETTLE_MS;
-        }
-        return;
-      }
-      if (now - this->last_change_ > NO_CHANGE_TIMEOUT_MS) {
-        this->finish_("Height not changing, stopping (limit reached?)");
-        return;
-      }
-      if (now - this->mode_start_ > TARGET_TIMEOUT_MS) {
-        this->finish_("Timeout, stopping");
-        return;
-      }
-      this->send_(diff > 0 ? CMD_UP : CMD_DOWN);
-      break;
-    }
-
-    default:
-      break;
-  }
+  // 7. While moving, watch the height until the desk has arrived
+  if (this->mode_ == Mode::GOTO)
+    this->check_goto_(now);
 }
 
 void HomeMaxDesk::dump_config() {
   ESP_LOGCONFIG(TAG, "HomeMax Desk:");
-  ESP_LOGCONFIG(TAG, "  Move duration: %u ms", (unsigned) this->move_duration_);
-  ESP_LOGCONFIG(TAG, "  Stop early: %d mm", this->stop_early_);
   ESP_LOGCONFIG(TAG, "  Height range: %.1f - %.1f cm (%s)", this->min_height_ / 10.0f,
                 this->max_height_ / 10.0f,
                 !this->auto_limits_ ? "configured"
@@ -506,11 +456,7 @@ void HomeMaxDesk::publish_cover_() {
   cover::CoverOperation op = cover::COVER_OPERATION_IDLE;
   if (this->moving_) {
     int8_t dir = this->direction_;
-    if (this->mode_ == Mode::MANUAL_UP)
-      dir = 1;
-    else if (this->mode_ == Mode::MANUAL_DOWN)
-      dir = -1;
-    else if (this->mode_ == Mode::TARGET)
+    if (this->mode_ == Mode::GOTO && this->target_ >= 0)
       dir = this->target_ > this->current_height_ ? 1 : -1;
     if (dir > 0)
       op = cover::COVER_OPERATION_OPENING;
@@ -563,6 +509,48 @@ void HomeMaxDesk::process_requests_(uint32_t now) {
   }
 }
 
+void HomeMaxDesk::send_goto_(int target_mm) {
+  const uint8_t hi = (target_mm >> 8) & 0xFF;
+  const uint8_t lo = target_mm & 0xFF;
+  const uint8_t cs = CMD_GOTO_HEIGHT + 0x02 + hi + lo;
+  const uint8_t buf[] = {0xF1, 0xF1, CMD_GOTO_HEIGHT, 0x02, hi, lo, cs, 0x7E};
+  this->write_array(buf, sizeof(buf));
+}
+
+void HomeMaxDesk::check_goto_(uint32_t now) {
+  const bool known = this->current_height_ >= 0;
+  const bool at_target = known && std::abs(this->target_ - this->current_height_) <= GOTO_TOLERANCE_MM;
+
+  if (at_target && now - this->height_changed_at_ >= GOTO_SETTLE_MS) {
+    this->end_goto_(true, "Target height reached");
+    return;
+  }
+  if (now - this->last_change_ > NO_CHANGE_TIMEOUT_MS) {
+    // The desk stopped before the target: limit reached, handset used, or ignored
+    const bool moved = known && (int32_t) (this->height_changed_at_ - this->mode_start_) > 0;
+    this->end_goto_(at_target, moved ? "Desk stopped before the target" : "Desk didn't move");
+    return;
+  }
+  if (now - this->mode_start_ > GOTO_TIMEOUT_MS) {
+    this->scheduled_save_ = 0;
+    this->finish_("Timeout, stopping");
+  }
+}
+
+void HomeMaxDesk::end_goto_(bool reached, const char *reason) {
+  // The controller stops by itself, so no Stop command here
+  const uint8_t save = this->pending_save_;
+  ESP_LOGI(TAG, "%s", reason);
+  this->mode_ = Mode::IDLE;
+  this->target_ = -1;
+  this->pending_save_ = 0;
+  if (reached && save != 0) {
+    this->scheduled_save_ = save;
+    this->save_at_ = millis() + SAVE_SETTLE_MS;
+  }
+  this->publish_cover_();
+}
+
 void HomeMaxDesk::finish_(const char *reason) {
   this->send_(CMD_STOP);
   ESP_LOGI(TAG, "%s", reason);
@@ -577,22 +565,15 @@ void HomeMaxDesk::finish_(const char *reason) {
 // ---------------------------------------------------------------------------
 
 void HomeMaxDesk::move_up() {
-  // Pressing again while already moving up extends the move
-  this->scheduled_save_ = 0;
-  this->pending_save_ = 0;
-  this->mode_ = Mode::MANUAL_UP;
-  this->manual_until_ = millis() + this->move_duration_;
-  this->send_now_ = true;
+  // Move all the way up; the controller stops at the top or on Stop
   ESP_LOGD(TAG, "Move up");
+  this->goto_height(this->max_height_ / 10.0f);
 }
 
 void HomeMaxDesk::move_down() {
-  this->scheduled_save_ = 0;
-  this->pending_save_ = 0;
-  this->mode_ = Mode::MANUAL_DOWN;
-  this->manual_until_ = millis() + this->move_duration_;
-  this->send_now_ = true;
+  // Move all the way down; the controller stops at the bottom or on Stop
   ESP_LOGD(TAG, "Move down");
+  this->goto_height(this->min_height_ / 10.0f);
 }
 
 void HomeMaxDesk::stop() {
@@ -612,19 +593,14 @@ void HomeMaxDesk::goto_height(float cm) {
   this->scheduled_save_ = 0;
   this->pending_save_ = 0;
   this->target_ = target;
-  this->mode_ = Mode::TARGET;
   this->mode_start_ = now;
   this->last_change_ = now;
-  ESP_LOGI(TAG, "Moving to %.1f cm", cm);
+  ESP_LOGI(TAG, "Moving to %.1f cm", target / 10.0f);
 
-  if (this->current_height_ < 0) {
-    // The controller is silent when idle: nudge it so it reports its height
-    ESP_LOGD(TAG, "Height unknown, nudging desk to get a reading");
-    this->send_(CMD_UP);
-    this->last_send_ = now;
-  } else {
-    this->send_now_ = true;
-  }
+  // The controller moves to the height by itself
+  this->mode_ = Mode::GOTO;
+  this->send_goto_(target);
+  this->publish_cover_();
 }
 
 void HomeMaxDesk::goto_position(uint8_t position) {
@@ -675,7 +651,7 @@ void HomeMaxDesk::set_position_height(uint8_t position, float cm) {
   }
   ESP_LOGI(TAG, "Setting position %u to %.1f cm", position, cm);
   this->goto_height(cm);
-  if (this->mode_ == Mode::TARGET)
+  if (this->mode_ == Mode::GOTO)
     this->pending_save_ = position;
 }
 

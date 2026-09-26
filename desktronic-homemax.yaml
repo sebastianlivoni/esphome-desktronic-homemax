@@ -88,8 +88,6 @@ homemax_desk:
   max_height: 119          # cm
   standing_height: 95      # cm, from this height on you count as standing
   poll_interval: 60s       # how often to read user limits / check the connection, 0s = off
-  move_duration: 1s        # how long Move up / Move down move per press
-  stop_early: 5            # mm, stop this close to a target (desk coasts a bit)
 
 button:
   - platform: template
@@ -136,3 +134,15 @@ wifi:
     password: !secret ap_password
 
 captive_portal:
+
+output:
+  - platform: gpio
+    pin: GPIO8
+    id: led_out
+    inverted: true
+
+light:
+  - platform: binary
+    id: onboard_led
+    name: "Onboard LED"
+    output: led_out

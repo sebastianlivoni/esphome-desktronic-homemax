@@ -44,8 +44,6 @@ CONF_USER_HEIGHT_MAX = "user_height_max"
 CONF_CONTROLLER_CONNECTED = "controller_connected"
 
 # Settings
-CONF_MOVE_DURATION = "move_duration"
-CONF_STOP_EARLY = "stop_early"
 CONF_MIN_HEIGHT = "min_height"
 CONF_MAX_HEIGHT = "max_height"
 CONF_STANDING_HEIGHT = "standing_height"
@@ -215,10 +213,6 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(
                 CONF_POLL_INTERVAL, default="60s"
             ): cv.positive_time_period_milliseconds,
-            cv.Optional(
-                CONF_MOVE_DURATION, default="1s"
-            ): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_STOP_EARLY, default=5): cv.int_range(min=0, max=50),
             cv.Optional(CONF_MIN_HEIGHT, default=50.0): cv.float_range(min=0, max=300),
             cv.Optional(CONF_MAX_HEIGHT, default=140.0): cv.float_range(min=0, max=300),
             cv.Optional(CONF_STANDING_HEIGHT, default=95.0): cv.float_range(
@@ -250,8 +244,6 @@ async def to_code(config):
     await uart.register_uart_device(var, config)
 
     # Settings
-    cg.add(var.set_move_duration(config[CONF_MOVE_DURATION]))
-    cg.add(var.set_stop_early(config[CONF_STOP_EARLY]))
     cg.add(var.set_height_limits(config[CONF_MIN_HEIGHT], config[CONF_MAX_HEIGHT]))
     cg.add(var.set_standing_height(config[CONF_STANDING_HEIGHT]))
     cg.add(
