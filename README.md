@@ -252,14 +252,16 @@ The plain Up (`0x01`) and Down (`0x02`) commands work differently: the controlle
 
 Because the controller is silent when idle, the component doesn't know the height right after startup. It learns it as soon as the desk moves.
 
-### Verified and unverified commands
+### Verified commands
 
-Verified on a HomeMax with a JCP35N12 controller:
+Everything the component uses is verified on a HomeMax with a JCP35N12 controller:
 
 | Direction | Bytes | Meaning |
 |---|---|---|
 | to controller | `0x01`, `0x02`, `0x2B` | Up, Down, Stop |
 | to controller | `0x1B` + 2 bytes | Go to height (mm) |
+| to controller | `0x05`, `0x06`, `0x27`, `0x28` | Go to position 1, 2, 3, 4 |
+| to controller | `0x03`, `0x04`, `0x25`, `0x26` | Save current height as position 1, 2, 3, 4 |
 | to controller | `0x07` | Request stored positions |
 | to controller | `0x0C` | Request physical height limits |
 | to controller | `0x20` | Request user limits |
@@ -267,15 +269,11 @@ Verified on a HomeMax with a JCP35N12 controller:
 | from controller | type `0x07`, 4 bytes | Height range: max (2 bytes), min (2 bytes). HomeMax: `04 A6 02 EE` = 119.0 / 75.0 cm |
 | from controller | type `0x20`, 1 byte | User limits set: low nibble = maximum, high nibble = minimum (`00` = none) |
 | from controller | types `0x21`, `0x22` | User maximum and minimum height |
-| from controller | types `0x27`, `0x28` | Stored positions 3 and 4 (`00 00` = not set) |
+| from controller | types `0x25`, `0x26`, `0x27`, `0x28` | Stored positions 1–4 (`00 00` = not set) |
 
-These are the usual Jiecang values but haven't been confirmed yet, which is why they can be changed in the config:
+Note that `0x25` and `0x26` mean different things depending on the direction: sent to the controller, they save positions 3 and 4; received from it, they report positions 1 and 2.
 
-- Go to position `0x05` / `0x06` / `0x27` / `0x28`
-- Save position `0x03` / `0x04` / `0x25` / `0x26`
-- Position reports `0x25` / `0x26` for positions 1 and 2
-
-The component logs every message it doesn't recognize at DEBUG level, for example `Message type 0x25, 2 bytes: 02 EE`. That's the easiest way to find the right values for your controller.
+Other Jiecang controllers may use different bytes for the positions, which is why those can be changed in the config. The component logs every message it doesn't recognize at DEBUG level, for example `Message type 0x25, 2 bytes: 02 EE`. That's the easiest way to find the right values for your controller.
 
 ## Troubleshooting
 
@@ -289,7 +287,7 @@ The component logs every message it doesn't recognize at DEBUG level, for exampl
 
 **Controller Connected is off.** The controller doesn't answer requests. Check the TX wire (ESP32 → controller RX) and the shared ground. If everything else works, set `poll_interval: 0s` to turn the check off.
 
-**Memory positions don't work.** Your controller may use different command bytes. Watch the DEBUG log for unrecognized messages, or see [Verified and unverified commands](#verified-and-unverified-commands).
+**Memory positions don't work.** Your controller may use different command bytes. Watch the DEBUG log for unrecognized messages, or see [Verified commands](#verified-commands).
 
 ## Acknowledgements
 

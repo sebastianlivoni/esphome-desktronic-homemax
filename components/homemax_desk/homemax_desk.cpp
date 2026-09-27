@@ -9,7 +9,7 @@ namespace homemax_desk {
 
 static const char *const TAG = "homemax_desk";
 
-// Commands verified on the Desktronic HomeMax (JCP35N12 controller)
+// All commands verified on the Desktronic HomeMax (JCP35N12 controller)
 static const uint8_t CMD_STOP[] = {0xF1, 0xF1, 0x2B, 0x00, 0x2B, 0x7E};
 static const uint8_t CMD_GOTO_HEIGHT = 0x1B;  // + 2 bytes height in mm, verified
 static const uint8_t REQ_CMD_SETTINGS = 0x07;
