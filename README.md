@@ -50,7 +50,7 @@ Add the component to your ESPHome config:
 external_components:
   - source:
       type: git
-      url: https://github.com/YOUR-NAME/esphome-desktronic-homemax
+      url: https://github.com/sebastianlivoni/esphome-desktronic-homemax
     components: [ homemax_desk ]
 
 uart:
