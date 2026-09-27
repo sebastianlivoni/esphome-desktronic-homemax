@@ -2,7 +2,7 @@
 
 An [ESPHome](https://esphome.io) component for **Desktronic HomeMax** standing desks. It connects an ESP32 to the desk controller's RJ12 port so you can control the desk from Home Assistant: move it, go to a specific height, use and save memory positions, and track how much you stand.
 
-The HomeMax uses a Jiecang controller that talks serial (UART) at 9600 baud. This component was written and tested on a HomeMax with an ESP32-C3 Super Mini and controller **JCP35N12-Y18-4G2/4MF** (the label on the control box under the desk).
+The HomeMax uses a Jiecang controller that talks serial (UART) at 9600 baud. This component was written and tested on a HomeMax with an ESP32-C3 Super Mini.
 
 ## Features
 
@@ -25,7 +25,6 @@ You need:
 - An ESP32 board. The example uses an **ESP32-C3 Super Mini**, but any ESP32 with a free UART works.
 - A **bidirectional logic level converter** (3.3 V ↔ 5 V), for example a 4-channel BSS138 module. The desk uses 5 V logic and the ESP32 uses 3.3 V, so don't connect them directly.
 - An **RJ12 breakout board** or a cut RJ12 cable to reach the controller's pins.
-- A USB power supply for the ESP32 (see [Power](#power)).
 
 ### Wiring
 
@@ -42,12 +41,6 @@ All grounds must be connected together: RJ12 Pin 2, both GND pins of the level c
 > **Check your pins with a multimeter before connecting anything.** Pin numbering depends on which way you count, and other controller models may differ. With the controller powered, the controller's TX pin sits near 5 V and flickers while the desk moves. Never connect the level converter to a pin that carries more than 5 V.
 
 ![ESP32-C3 Super Mini wired to the RJ12 breakout through the level converter](images/wiring.webp)
-
-### Power
-
-Power the ESP32 from a USB charger, not from the desk's RJ12 5 V pin. In testing, the desk's port couldn't supply enough current once WiFi started, so the ESP32 powered up but never connected.
-
-Never connect the desk's 5 V and USB power at the same time. That connects two power supplies together and can damage the USB port, the ESP32, or the controller.
 
 ## Installation
 
