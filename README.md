@@ -31,16 +31,17 @@ You need:
 
 | RJ12 (controller) | Level converter | ESP32-C3 Super Mini |
 |---|---|---|
+| Pin 2 (GND) | GND (HV and LV side) | G |
 | Pin 3 (controller TX) | HV3 → LV3 | GPIO 20 (RX) |
+| Pin 4 (VCC) | HV | 5V |
 | Pin 5 (controller RX) | HV4 → LV4 | GPIO 21 (TX) |
-| GND | GND | G |
-| 5 V | not connected | not connected |
-| | HV | 5V |
 | | LV | 3V3 |
 
-All grounds must be connected together. The level converter's HV side gets 5 V from the ESP32's 5V pin, and the LV side gets 3.3 V from the 3V3 pin.
+All grounds must be connected together: RJ12 Pin 2, both GND pins of the level converter, and the ESP32's G pin. The level converter's HV side is connected to RJ12 Pin 4 and the ESP32's 5V pin, and the LV side gets 3.3 V from the 3V3 pin.
 
 > **Check your pins with a multimeter before connecting anything.** Pin numbering depends on which way you count, and other controller models may differ. With the controller powered, the controller's TX pin sits near 5 V and flickers while the desk moves. Never connect the level converter to a pin that carries more than 5 V.
+
+![ESP32-C3 Super Mini wired to the RJ12 breakout through the level converter](images/wiring.webp)
 
 ### Power
 
