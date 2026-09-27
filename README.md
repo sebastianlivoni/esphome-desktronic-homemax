@@ -77,7 +77,7 @@ homemax_desk:
     name: "Stop"
 ```
 
-A complete example with every feature is in [`desktronic-homemax.yaml`](desktronic-homemax.yaml). It expects a `secrets.yaml` next to it:
+A complete example with every feature is in [`desktronic-homemax.yaml`](desktronic-homemax.yaml). The same example with Danish entity names is in [`desktronic-homemax.da.yaml`](desktronic-homemax.da.yaml). Both expect a `secrets.yaml` next to them:
 
 ```yaml
 wifi_ssid: "your-wifi"

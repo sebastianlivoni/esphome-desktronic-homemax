@@ -1,0 +1,171 @@
+# Dansk eksempel: samme opsætning som desktronic-homemax.yaml,
+# men med danske navne i Home Assistant.
+
+esphome:
+  name: desktronic-homemax
+  friendly_name: Desktronic HomeMax
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [ homemax_desk ]
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO21   # -> LV4 -> HV4 -> RJ12 pin 5 (bordets RX)
+  rx_pin: GPIO20   # <- LV3 <- HV3 <- RJ12 pin 3 (bordets TX)
+  baud_rate: 9600
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  level: DEBUG
+
+homemax_desk:
+  id: desk
+
+  # Højde og bevægelse
+  height:
+    name: "Højde"
+  height_percent:
+    name: "Højde i procent"
+  height_min:
+    name: "Min. højde"
+  height_max:
+    name: "Maks. højde"
+  user_height_min:
+    name: "Min. brugerhøjde"
+  user_height_max:
+    name: "Maks. brugerhøjde"
+  set_user_height_max:
+    name: "Gem nuværende som maks. brugerhøjde"
+  set_user_height_min:
+    name: "Gem nuværende som min. brugerhøjde"
+  clear_user_height_max:
+    name: "Fjern maks. brugerhøjde"
+  clear_user_height_min:
+    name: "Fjern min. brugerhøjde"
+  move_up:
+    name: "Kør op"
+  move_down:
+    name: "Kør ned"
+  stop:
+    name: "Stop"
+  nudge_up:
+    name: "Op 1 cm"
+  nudge_down:
+    name: "Ned 1 cm"
+  target_height:
+    name: "Målhøjde"
+    mode: box
+  cover:
+    name: "Skrivebord"
+
+  # Navngivne højder
+  preset:
+    name: "Forvalg"
+    presets:
+      - name: "Sidde"
+        height: 75
+      - name: "Stå"
+        height: 110
+    other_option: "Andet"   # vises, når bordet ikke står ved et forvalg
+
+  # Hukommelsespositioner (betjeningspanelet har kun 1 og 2, styreboksen gemmer 4)
+  position1:
+    name: "Position 1"
+  position2:
+    name: "Position 2"
+  position3:
+    name: "Position 3"
+  position4:
+    name: "Position 4"
+  position1_height:
+    name: "Højde for position 1"
+  position2_height:
+    name: "Højde for position 2"
+  position3_height:
+    name: "Højde for position 3"
+  position4_height:
+    name: "Højde for position 4"
+  save_position1:
+    name: "Gem nuværende som position 1"
+  save_position2:
+    name: "Gem nuværende som position 2"
+  save_position3:
+    name: "Gem nuværende som position 3"
+  save_position4:
+    name: "Gem nuværende som position 4"
+  set_position1:
+    name: "Indstil position 1"
+    mode: box
+  set_position2:
+    name: "Indstil position 2"
+    mode: box
+  set_position3:
+    name: "Indstil position 3"
+    mode: box
+  set_position4:
+    name: "Indstil position 4"
+    mode: box
+  refresh_positions:
+    name: "Opdater positioner"
+
+  # Status
+  moving:
+    name: "Bevæger sig"
+  standing:
+    name: "Stående"
+  standing_time:
+    name: "Ståtid i dag"
+  controller_connected:
+    name: "Styreboks forbundet"
+
+  # Indstillinger
+  auto_limits: true        # læs højdeområde og brugergrænser fra styreboksen
+  min_height: 75           # cm, bruges indtil styreboksen melder sit område
+  max_height: 119          # cm
+  standing_height: 95      # cm, fra denne højde tæller det som stående
+  nudge_step: 1            # cm pr. tryk på Op 1 cm / Ned 1 cm
+  poll_interval: 60s       # hvor ofte brugergrænser læses / forbindelsen tjekkes, 0s = fra
+
+# Tid fra Home Assistant, bruges til at nulstille ståtiden ved midnat
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 0
+        then:
+          - lambda: "id(desk).reset_standing_time();"
+
+# Lokal betjeningsside på http://desktronic-homemax.local
+web_server:
+  port: 80
+  version: 3
+  auth:
+    type: digest
+    username: !secret web_username
+    password: !secret web_password
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  output_power: 8.5dB
+  ap:
+    ssid: "Livingroom Fallback Hotspot"
+    password: !secret ap_password
+
+captive_portal:
