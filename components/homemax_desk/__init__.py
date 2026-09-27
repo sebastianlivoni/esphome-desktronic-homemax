@@ -1,6 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import binary_sensor, button, cover, number, sensor, uart
+from esphome.components import binary_sensor, button, cover, number, select, sensor, uart
 from esphome.const import (
     CONF_ID,
     DEVICE_CLASS_CONNECTIVITY,
@@ -15,7 +15,7 @@ from esphome.const import (
 )
 
 DEPENDENCIES = ["uart"]
-AUTO_LOAD = ["sensor", "binary_sensor", "button", "number", "cover"]
+AUTO_LOAD = ["sensor", "binary_sensor", "button", "number", "cover", "select"]
 
 # Entities
 CONF_HEIGHT = "height"
@@ -54,6 +54,41 @@ DeskButton = homemax_ns.class_("DeskButton", button.Button)
 DeskHeightNumber = homemax_ns.class_("DeskHeightNumber", number.Number)
 DeskPositionNumber = homemax_ns.class_("DeskPositionNumber", number.Number)
 DeskCover = homemax_ns.class_("DeskCover", cover.Cover)
+DeskPresetSelect = homemax_ns.class_("DeskPresetSelect", select.Select)
+
+CONF_PRESET = "preset"
+CONF_PRESETS = "presets"
+CONF_OTHER_OPTION = "other_option"
+
+
+def _validate_presets(config):
+    names = [p["name"] for p in config[CONF_PRESETS]]
+    if len(set(names)) != len(names):
+        raise cv.Invalid("Preset names must be unique")
+    if config[CONF_OTHER_OPTION] in names:
+        raise cv.Invalid(f"No preset may be called '{config[CONF_OTHER_OPTION]}'")
+    return config
+
+
+PRESET_SCHEMA = cv.All(
+    select.select_schema(DeskPresetSelect, icon="mdi:format-list-bulleted").extend(
+        {
+            cv.Required(CONF_PRESETS): cv.All(
+                cv.ensure_list(
+                    cv.Schema(
+                        {
+                            cv.Required("name"): cv.string_strict,
+                            cv.Required("height"): cv.float_range(min=0, max=300),
+                        }
+                    )
+                ),
+                cv.Length(min=1),
+            ),
+            cv.Optional(CONF_OTHER_OPTION, default="Other"): cv.string_strict,
+        }
+    ),
+    _validate_presets,
+)
 
 # Must match the ButtonAction values in homemax_desk.h
 ACTION_MOVE_UP = 0
@@ -64,6 +99,10 @@ ACTION_SAVE_POSITION = 4
 ACTION_REFRESH_POSITIONS = 5
 ACTION_NUDGE_UP = 6
 ACTION_NUDGE_DOWN = 7
+ACTION_SET_USER_MAX = 8
+ACTION_SET_USER_MIN = 9
+ACTION_CLEAR_USER_MAX = 10
+ACTION_CLEAR_USER_MIN = 11
 
 # key -> (action, slot)
 BUTTON_ACTIONS = {
@@ -73,6 +112,10 @@ BUTTON_ACTIONS = {
     CONF_REFRESH_POSITIONS: (ACTION_REFRESH_POSITIONS, 0),
     "nudge_up": (ACTION_NUDGE_UP, 0),
     "nudge_down": (ACTION_NUDGE_DOWN, 0),
+    "set_user_height_max": (ACTION_SET_USER_MAX, 0),
+    "set_user_height_min": (ACTION_SET_USER_MIN, 0),
+    "clear_user_height_max": (ACTION_CLEAR_USER_MAX, 0),
+    "clear_user_height_min": (ACTION_CLEAR_USER_MIN, 0),
 }
 for _n in POSITIONS:
     BUTTON_ACTIONS[f"position{_n}"] = (ACTION_GOTO_POSITION, _n)
@@ -145,6 +188,22 @@ CONFIG_SCHEMA = cv.All(
                 DeskButton, icon="mdi:chevron-down"
             ),
             cv.Optional("nudge_step", default=1.0): cv.float_range(min=0.1, max=10),
+            # User limits
+            cv.Optional("set_user_height_max"): button.button_schema(
+                DeskButton, icon="mdi:arrow-collapse-up"
+            ),
+            cv.Optional("set_user_height_min"): button.button_schema(
+                DeskButton, icon="mdi:arrow-collapse-down"
+            ),
+            cv.Optional("clear_user_height_max"): button.button_schema(
+                DeskButton, icon="mdi:arrow-expand-up"
+            ),
+            cv.Optional("clear_user_height_min"): button.button_schema(
+                DeskButton, icon="mdi:arrow-expand-down"
+            ),
+            cv.Optional("set_user_max_command", default=0x21): cv.hex_uint8_t,
+            cv.Optional("set_user_min_command", default=0x22): cv.hex_uint8_t,
+            cv.Optional("clear_user_limit_command", default=0x23): cv.hex_uint8_t,
             cv.Optional(CONF_HEIGHT_PERCENT): sensor.sensor_schema(
                 unit_of_measurement=UNIT_PERCENT,
                 accuracy_decimals=0,
@@ -178,6 +237,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_TARGET_HEIGHT): _height_number(
                 DeskHeightNumber, "mdi:human-male-height-variant"
             ),
+            cv.Optional(CONF_PRESET): PRESET_SCHEMA,
             cv.Optional(CONF_COVER): cover.cover_schema(
                 DeskCover, icon="mdi:desk"
             ),
@@ -235,6 +295,13 @@ async def to_code(config):
     cg.add(var.set_height_limits(config[CONF_MIN_HEIGHT], config[CONF_MAX_HEIGHT]))
     cg.add(var.set_standing_height(config[CONF_STANDING_HEIGHT]))
     cg.add(var.set_nudge_step(config["nudge_step"]))
+    cg.add(
+        var.set_user_limit_commands(
+            config["set_user_max_command"],
+            config["set_user_min_command"],
+            config["clear_user_limit_command"],
+        )
+    )
     cg.add(var.set_auto_limits(config[CONF_AUTO_LIMITS]))
     cg.add(var.set_poll_interval(config[CONF_POLL_INTERVAL]))
     for n in POSITIONS:
@@ -305,6 +372,16 @@ async def to_code(config):
             cg.add(num.set_parent(var))
             cg.add(num.set_slot(slot))
             cg.add(var.set_position_number(slot, num))
+
+    # Presets
+    if CONF_PRESET in config:
+        conf = config[CONF_PRESET]
+        options = [p["name"] for p in conf[CONF_PRESETS]] + [conf[CONF_OTHER_OPTION]]
+        sel = await select.new_select(conf, options=options)
+        cg.add(sel.set_parent(var))
+        for p in conf[CONF_PRESETS]:
+            cg.add(sel.add_preset(p["height"]))
+        cg.add(var.set_preset_select(sel))
 
     # Cover
     if CONF_COVER in config:

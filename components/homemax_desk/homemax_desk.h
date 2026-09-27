@@ -8,6 +8,8 @@
 #include "esphome/components/button/button.h"
 #include "esphome/components/number/number.h"
 #include "esphome/components/cover/cover.h"
+#include "esphome/components/select/select.h"
+#include <vector>
 
 namespace esphome {
 namespace homemax_desk {
@@ -22,11 +24,17 @@ enum ButtonAction : uint8_t {
   ACTION_REFRESH_POSITIONS = 5,
   ACTION_NUDGE_UP = 6,
   ACTION_NUDGE_DOWN = 7,
+  ACTION_SET_USER_MAX = 8,
+  ACTION_SET_USER_MIN = 9,
+  ACTION_CLEAR_USER_MAX = 10,
+  ACTION_CLEAR_USER_MIN = 11,
 };
 
 // Memory slots in the controller. The HomeMax handset only has buttons for
 // 1 and 2, but the controller stores four.
 static const uint8_t NUM_POSITIONS = 4;
+
+class DeskPresetSelect;
 
 class HomeMaxDesk : public Component, public uart::UARTDevice {
  public:
@@ -58,10 +66,16 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void set_moving_sensor(binary_sensor::BinarySensor *s) { this->moving_sensor_ = s; }
   void set_standing_sensor(binary_sensor::BinarySensor *s) { this->standing_sensor_ = s; }
   void set_connected_sensor(binary_sensor::BinarySensor *s) { this->connected_sensor_ = s; }
+  void set_preset_select(DeskPresetSelect *s) { this->preset_select_ = s; }
   void set_standing_time_sensor(sensor::Sensor *s) { this->standing_time_sensor_ = s; }
   void set_cover(cover::Cover *c) { this->cover_ = c; }
 
   void set_standing_height(float cm) { this->standing_height_ = (int) (cm * 10 + 0.5f); }
+  void set_user_limit_commands(uint8_t set_max, uint8_t set_min, uint8_t clear) {
+    this->set_user_max_cmd_ = set_max;
+    this->set_user_min_cmd_ = set_min;
+    this->clear_user_limit_cmd_ = clear;
+  }
   void set_nudge_step(float cm) { this->nudge_step_ = (int) (cm * 10 + 0.5f); }
   void set_height_limits(float min_cm, float max_cm) {
     this->config_min_ = this->min_height_ = (int) (min_cm * 10 + 0.5f);
@@ -91,12 +105,20 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void save_position(uint8_t position);
   // Move to a height, then save it as memory position 1-4
   void set_position_height(uint8_t position, float cm);
+  // Use the current height as the user maximum / minimum
+  void set_user_max();
+  void set_user_min();
+  // Remove the user maximum / minimum
+  void clear_user_max();
+  void clear_user_min();
   // Ask the controller for its stored positions and height limits
   void request_settings();
   // Reset the standing time counter (e.g. at midnight)
   void reset_standing_time();
   // Send a raw single-byte Jiecang command without data: F1 F1 <cmd> 00 <cmd> 7E
   void send_command(uint8_t cmd);
+  // Send a command with one data byte: F1 F1 <cmd> 01 <data> <cs> 7E
+  void send_command(uint8_t cmd, uint8_t data);
 
   // ---- State ----
   // Current height in cm, or NAN if not known yet
@@ -133,6 +155,7 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void update_moving_(uint32_t now);
   void update_posture_(uint32_t now);
   void update_connected_(uint32_t now);
+  void update_preset_();
   void process_requests_(uint32_t now);
   void publish_standing_time_();
   void publish_height_derived_();
@@ -156,6 +179,7 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   binary_sensor::BinarySensor *moving_sensor_{nullptr};
   binary_sensor::BinarySensor *standing_sensor_{nullptr};
   binary_sensor::BinarySensor *connected_sensor_{nullptr};
+  DeskPresetSelect *preset_select_{nullptr};
   sensor::Sensor *standing_time_sensor_{nullptr};
   cover::Cover *cover_{nullptr};
 
@@ -172,6 +196,9 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   int config_max_{1400};
   int standing_height_{950};
   int nudge_step_{10};  // mm
+  uint8_t set_user_max_cmd_{0x21};
+  uint8_t set_user_min_cmd_{0x22};
+  uint8_t clear_user_limit_cmd_{0x23};  // + 0x01 = maximum, 0x02 = minimum
   uint32_t poll_interval_ms_{60000};
   uint8_t position_cmd_[NUM_POSITIONS]{0x05, 0x06, 0x27, 0x28};
   uint8_t save_cmd_[NUM_POSITIONS]{0x03, 0x04, 0x25, 0x26};
@@ -239,6 +266,19 @@ class DeskPositionNumber : public number::Number, public Parented<HomeMaxDesk> {
  protected:
   void control(float value) override;
   uint8_t slot_{1};
+};
+
+// Named height presets. Shows the preset the desk is at, or the "other"
+// option when it's at none of them.
+class DeskPresetSelect : public select::Select, public Parented<HomeMaxDesk> {
+ public:
+  void add_preset(float cm) { this->heights_.push_back((int) (cm * 10 + 0.5f)); }
+  // Publish the preset matching this height (mm), or the "other" option
+  void update_from_height(int h);
+
+ protected:
+  void control(size_t index) override;
+  std::vector<int> heights_;  // mm, in option order; the last option is "other"
 };
 
 // The desk as a Home Assistant cover: 0% = lowest, 100% = highest

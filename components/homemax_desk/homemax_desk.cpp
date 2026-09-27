@@ -1,5 +1,6 @@
 #include "homemax_desk.h"
 #include "esphome/core/log.h"
+#include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -9,7 +10,7 @@ namespace homemax_desk {
 
 static const char *const TAG = "homemax_desk";
 
-// All commands verified on the Desktronic HomeMax (JCP35N12 controller)
+// Commands verified on the Desktronic HomeMax
 static const uint8_t CMD_STOP[] = {0xF1, 0xF1, 0x2B, 0x00, 0x2B, 0x7E};
 static const uint8_t CMD_GOTO_HEIGHT = 0x1B;  // + 2 bytes height in mm, verified
 static const uint8_t REQ_CMD_SETTINGS = 0x07;
@@ -39,6 +40,8 @@ static const uint32_t MOVING_HOLD_MS = 1000;
 static const uint32_t REQUEST_GAP_MS = 150;
 // Controller counts as disconnected this long after a missed keep-alive
 static const uint32_t CONNECTION_GRACE_MS = 10000;
+// A preset counts as reached within this distance
+static const int PRESET_TOLERANCE_MM = 10;
 // Hysteresis for the standing sensor (mm)
 static const int STANDING_HYSTERESIS = 10;
 // How often to publish the standing time while standing
@@ -111,6 +114,8 @@ void HomeMaxDesk::dump_config() {
                                     : (this->limits_known_ ? "from controller" : "waiting for controller"));
   ESP_LOGCONFIG(TAG, "  Standing from: %.1f cm", this->standing_height_ / 10.0f);
   ESP_LOGCONFIG(TAG, "  Nudge step: %.1f cm", this->nudge_step_ / 10.0f);
+  ESP_LOGCONFIG(TAG, "  User limit commands: set max 0x%02X, set min 0x%02X, clear 0x%02X",
+                this->set_user_max_cmd_, this->set_user_min_cmd_, this->clear_user_limit_cmd_);
   ESP_LOGCONFIG(TAG, "  Keep-alive: %u s", (unsigned) (this->poll_interval_ms_ / 1000));
   ESP_LOGCONFIG(TAG, "  Position commands: 0x%02X, 0x%02X, 0x%02X, 0x%02X", this->position_cmd_[0],
                 this->position_cmd_[1], this->position_cmd_[2], this->position_cmd_[3]);
@@ -229,7 +234,8 @@ void HomeMaxDesk::on_height_(int h) {
     return;
 
   const uint32_t now = millis();
-  if (this->current_height_ >= 0)
+  const bool first = this->current_height_ < 0;
+  if (!first)
     this->direction_ = h > this->current_height_ ? 1 : -1;
   this->current_height_ = h;
   this->last_change_ = now;
@@ -243,6 +249,8 @@ void HomeMaxDesk::on_height_(int h) {
   this->update_moving_(now);
   this->update_posture_(now);
   this->publish_height_derived_();
+  if (first)
+    this->update_preset_();
 }
 
 void HomeMaxDesk::on_physical_limits_(int max_h, int min_h) {
@@ -373,12 +381,19 @@ void HomeMaxDesk::update_moving_(uint32_t now) {
     return;
 
   this->moving_ = moving;
-  if (!moving)
+  if (!moving) {
     this->direction_ = 0;
+    this->update_preset_();
+  }
   ESP_LOGD(TAG, "Moving: %s", moving ? "yes" : "no");
   if (this->moving_sensor_ != nullptr)
     this->moving_sensor_->publish_state(moving);
   this->publish_cover_();
+}
+
+void HomeMaxDesk::update_preset_() {
+  if (this->preset_select_ != nullptr && this->current_height_ >= 0)
+    this->preset_select_->update_from_height(this->current_height_);
 }
 
 void HomeMaxDesk::update_posture_(uint32_t now) {
@@ -482,6 +497,46 @@ void HomeMaxDesk::send_(const uint8_t *cmd) { this->write_array(cmd, 6); }
 void HomeMaxDesk::send_command(uint8_t cmd) {
   const uint8_t buf[] = {0xF1, 0xF1, cmd, 0x00, cmd, 0x7E};
   this->write_array(buf, sizeof(buf));
+}
+
+void HomeMaxDesk::send_command(uint8_t cmd, uint8_t data) {
+  const uint8_t cs = cmd + 0x01 + data;
+  const uint8_t buf[] = {0xF1, 0xF1, cmd, 0x01, data, cs, 0x7E};
+  this->write_array(buf, sizeof(buf));
+}
+
+void HomeMaxDesk::set_user_max() {
+  if (this->mode_ != Mode::IDLE) {
+    ESP_LOGW(TAG, "Desk is moving, not setting the user maximum");
+    return;
+  }
+  ESP_LOGI(TAG, "Setting user maximum to the current height%s",
+           this->current_height_ >= 0 ? "" : " (height unknown)");
+  this->send_command(this->set_user_max_cmd_);
+  this->request_settings();  // read the limits back
+}
+
+void HomeMaxDesk::set_user_min() {
+  if (this->mode_ != Mode::IDLE) {
+    ESP_LOGW(TAG, "Desk is moving, not setting the user minimum");
+    return;
+  }
+  ESP_LOGI(TAG, "Setting user minimum to the current height%s",
+           this->current_height_ >= 0 ? "" : " (height unknown)");
+  this->send_command(this->set_user_min_cmd_);
+  this->request_settings();
+}
+
+void HomeMaxDesk::clear_user_max() {
+  ESP_LOGI(TAG, "Clearing user maximum");
+  this->send_command(this->clear_user_limit_cmd_, 0x01);
+  this->request_settings();
+}
+
+void HomeMaxDesk::clear_user_min() {
+  ESP_LOGI(TAG, "Clearing user minimum");
+  this->send_command(this->clear_user_limit_cmd_, 0x02);
+  this->request_settings();
 }
 
 void HomeMaxDesk::request_settings() {
@@ -697,6 +752,18 @@ void DeskButton::press_action() {
     case ACTION_NUDGE_DOWN:
       this->parent_->nudge(-this->parent_->get_nudge_step());
       break;
+    case ACTION_SET_USER_MAX:
+      this->parent_->set_user_max();
+      break;
+    case ACTION_SET_USER_MIN:
+      this->parent_->set_user_min();
+      break;
+    case ACTION_CLEAR_USER_MAX:
+      this->parent_->clear_user_max();
+      break;
+    case ACTION_CLEAR_USER_MIN:
+      this->parent_->clear_user_min();
+      break;
     case ACTION_SAVE_POSITION:
       this->parent_->save_position(this->slot_);
       break;
@@ -714,6 +781,34 @@ void DeskHeightNumber::control(float value) {
 void DeskPositionNumber::control(float value) {
   // The state is published once the position is actually saved
   this->parent_->set_position_height(this->slot_, value);
+}
+
+void DeskPresetSelect::update_from_height(int h) {
+  size_t index = this->heights_.size();  // the "other" option
+  int best = PRESET_TOLERANCE_MM + 1;
+  for (size_t i = 0; i < this->heights_.size(); i++) {
+    const int diff = std::abs(this->heights_[i] - h);
+    if (diff < best) {
+      best = diff;
+      index = i;
+    }
+  }
+  const auto active = this->active_index();
+  if (!this->has_state() || !active.has_value() || *active != index)
+    this->publish_state(index);
+}
+
+void DeskPresetSelect::control(size_t index) {
+  if (index >= this->heights_.size()) {
+    // "Other" isn't a height; just show the real state again
+    this->publish_state(index);
+    const float h = this->parent_->get_height();
+    if (!std::isnan(h))
+      this->update_from_height((int) (h * 10 + 0.5f));
+    return;
+  }
+  this->publish_state(index);
+  this->parent_->goto_height(this->heights_[index] / 10.0f);
 }
 
 cover::CoverTraits DeskCover::get_traits() {

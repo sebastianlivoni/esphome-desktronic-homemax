@@ -38,6 +38,14 @@ homemax_desk:
     name: "User Height Min"
   user_height_max:
     name: "User Height Max"
+  set_user_height_max:
+    name: "Set Current as User Max"
+  set_user_height_min:
+    name: "Set Current as User Min"
+  clear_user_height_max:
+    name: "Clear User Max"
+  clear_user_height_min:
+    name: "Clear User Min"
   move_up:
     name: "Move up"
   move_down:
@@ -53,6 +61,16 @@ homemax_desk:
     mode: box
   cover:
     name: "Desk"
+
+  # Named height presets
+  preset:
+    name: "Desk Preset"
+    presets:
+      - name: "Sit"
+        height: 75
+      - name: "Stand"
+        height: 110
+    other_option: "Other"   # shown when the desk is at none of the presets
 
   # Memory positions (the handset only has 1 and 2, the controller stores 4)
   position1:
@@ -111,19 +129,6 @@ homemax_desk:
   standing_height: 95      # cm, from this height on you count as standing
   nudge_step: 1            # cm per press of Up 1 cm / Down 1 cm
   poll_interval: 60s       # how often to read user limits / check the connection, 0s = off
-
-button:
-  - platform: template
-    name: "Desk Sit"
-    icon: "mdi:chair-rolling"
-    on_press:
-      - lambda: "id(desk).goto_height(75);"
-
-  - platform: template
-    name: "Desk Stand"
-    icon: "mdi:human-handsup"
-    on_press:
-      - lambda: "id(desk).goto_height(110);"
 
 # Time from Home Assistant, used to reset the standing time at midnight
 time:
