@@ -62,6 +62,8 @@ ACTION_STOP = 2
 ACTION_GOTO_POSITION = 3
 ACTION_SAVE_POSITION = 4
 ACTION_REFRESH_POSITIONS = 5
+ACTION_NUDGE_UP = 6
+ACTION_NUDGE_DOWN = 7
 
 # key -> (action, slot)
 BUTTON_ACTIONS = {
@@ -69,6 +71,8 @@ BUTTON_ACTIONS = {
     CONF_MOVE_DOWN: (ACTION_MOVE_DOWN, 0),
     CONF_STOP: (ACTION_STOP, 0),
     CONF_REFRESH_POSITIONS: (ACTION_REFRESH_POSITIONS, 0),
+    "nudge_up": (ACTION_NUDGE_UP, 0),
+    "nudge_down": (ACTION_NUDGE_DOWN, 0),
 }
 for _n in POSITIONS:
     BUTTON_ACTIONS[f"position{_n}"] = (ACTION_GOTO_POSITION, _n)
@@ -134,6 +138,13 @@ CONFIG_SCHEMA = cv.All(
                 DeskButton, icon="mdi:arrow-down-bold"
             ),
             cv.Optional(CONF_STOP): button.button_schema(DeskButton, icon="mdi:stop"),
+            cv.Optional("nudge_up"): button.button_schema(
+                DeskButton, icon="mdi:chevron-up"
+            ),
+            cv.Optional("nudge_down"): button.button_schema(
+                DeskButton, icon="mdi:chevron-down"
+            ),
+            cv.Optional("nudge_step", default=1.0): cv.float_range(min=0.1, max=10),
             cv.Optional(CONF_HEIGHT_PERCENT): sensor.sensor_schema(
                 unit_of_measurement=UNIT_PERCENT,
                 accuracy_decimals=0,
@@ -223,6 +234,7 @@ async def to_code(config):
     # Settings
     cg.add(var.set_height_limits(config[CONF_MIN_HEIGHT], config[CONF_MAX_HEIGHT]))
     cg.add(var.set_standing_height(config[CONF_STANDING_HEIGHT]))
+    cg.add(var.set_nudge_step(config["nudge_step"]))
     cg.add(var.set_auto_limits(config[CONF_AUTO_LIMITS]))
     cg.add(var.set_poll_interval(config[CONF_POLL_INTERVAL]))
     for n in POSITIONS:

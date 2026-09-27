@@ -20,6 +20,8 @@ enum ButtonAction : uint8_t {
   ACTION_GOTO_POSITION = 3,  // uses the button's slot
   ACTION_SAVE_POSITION = 4,  // uses the button's slot
   ACTION_REFRESH_POSITIONS = 5,
+  ACTION_NUDGE_UP = 6,
+  ACTION_NUDGE_DOWN = 7,
 };
 
 // Memory slots in the controller. The HomeMax handset only has buttons for
@@ -60,6 +62,7 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void set_cover(cover::Cover *c) { this->cover_ = c; }
 
   void set_standing_height(float cm) { this->standing_height_ = (int) (cm * 10 + 0.5f); }
+  void set_nudge_step(float cm) { this->nudge_step_ = (int) (cm * 10 + 0.5f); }
   void set_height_limits(float min_cm, float max_cm) {
     this->config_min_ = this->min_height_ = (int) (min_cm * 10 + 0.5f);
     this->config_max_ = this->max_height_ = (int) (max_cm * 10 + 0.5f);
@@ -80,6 +83,8 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   void move_down();
   void stop();
   void goto_height(float cm);
+  // Move up (positive) or down (negative) by this many cm from the current height
+  void nudge(float cm);
   // Go to a memory position stored in the controller (1-4)
   void goto_position(uint8_t position);
   // Save the current height as memory position 1-4
@@ -100,6 +105,7 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   }
   float get_height_percent() const;
   float get_min_height() const { return this->min_height_ / 10.0f; }
+  float get_nudge_step() const { return this->nudge_step_ / 10.0f; }
   float get_max_height() const { return this->max_height_ / 10.0f; }
   bool is_moving() const { return this->moving_; }
   bool is_standing() const { return this->standing_; }
@@ -165,6 +171,7 @@ class HomeMaxDesk : public Component, public uart::UARTDevice {
   int config_min_{500};       // from min_height / max_height
   int config_max_{1400};
   int standing_height_{950};
+  int nudge_step_{10};  // mm
   uint32_t poll_interval_ms_{60000};
   uint8_t position_cmd_[NUM_POSITIONS]{0x05, 0x06, 0x27, 0x28};
   uint8_t save_cmd_[NUM_POSITIONS]{0x03, 0x04, 0x25, 0x26};

@@ -44,6 +44,10 @@ homemax_desk:
     name: "Move down"
   stop:
     name: "Stop"
+  nudge_up:
+    name: "Up 1 cm"
+  nudge_down:
+    name: "Down 1 cm"
   target_height:
     name: "Target Height"
     mode: box
@@ -105,6 +109,7 @@ homemax_desk:
   min_height: 75           # cm, used until the controller reports its range
   max_height: 119          # cm
   standing_height: 95      # cm, from this height on you count as standing
+  nudge_step: 1            # cm per press of Up 1 cm / Down 1 cm
   poll_interval: 60s       # how often to read user limits / check the connection, 0s = off
 
 button:
@@ -135,6 +140,9 @@ time:
 web_server:
   port: 80
   version: 3
+  auth:
+    username: !secret web_username
+    password: !secret web_password
 
 api:
   encryption:

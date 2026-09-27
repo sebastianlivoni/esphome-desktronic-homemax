@@ -110,6 +110,7 @@ void HomeMaxDesk::dump_config() {
                 !this->auto_limits_ ? "configured"
                                     : (this->limits_known_ ? "from controller" : "waiting for controller"));
   ESP_LOGCONFIG(TAG, "  Standing from: %.1f cm", this->standing_height_ / 10.0f);
+  ESP_LOGCONFIG(TAG, "  Nudge step: %.1f cm", this->nudge_step_ / 10.0f);
   ESP_LOGCONFIG(TAG, "  Keep-alive: %u s", (unsigned) (this->poll_interval_ms_ / 1000));
   ESP_LOGCONFIG(TAG, "  Position commands: 0x%02X, 0x%02X, 0x%02X, 0x%02X", this->position_cmd_[0],
                 this->position_cmd_[1], this->position_cmd_[2], this->position_cmd_[3]);
@@ -604,6 +605,22 @@ void HomeMaxDesk::goto_height(float cm) {
   this->publish_cover_();
 }
 
+void HomeMaxDesk::nudge(float cm) {
+  if (this->current_height_ < 0) {
+    ESP_LOGW(TAG, "Height unknown, can't nudge yet. Move the desk once first.");
+    return;
+  }
+  // Nudge from the target while moving, so repeated presses add up
+  const int from = this->mode_ == Mode::GOTO && this->target_ >= 0 ? this->target_ : this->current_height_;
+  int target = from + (int) (cm * 10 + (cm >= 0 ? 0.5f : -0.5f));
+  target = clamp(target, this->min_height_, this->max_height_);
+  if (target == from) {
+    ESP_LOGD(TAG, "Already at the %s limit", cm > 0 ? "upper" : "lower");
+    return;
+  }
+  this->goto_height(target / 10.0f);
+}
+
 void HomeMaxDesk::goto_position(uint8_t position) {
   if (position < 1 || position > NUM_POSITIONS) {
     ESP_LOGW(TAG, "Unknown position %u", position);
@@ -673,6 +690,12 @@ void DeskButton::press_action() {
       break;
     case ACTION_REFRESH_POSITIONS:
       this->parent_->request_settings();
+      break;
+    case ACTION_NUDGE_UP:
+      this->parent_->nudge(this->parent_->get_nudge_step());
+      break;
+    case ACTION_NUDGE_DOWN:
+      this->parent_->nudge(-this->parent_->get_nudge_step());
       break;
     case ACTION_SAVE_POSITION:
       this->parent_->save_position(this->slot_);

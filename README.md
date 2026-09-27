@@ -10,6 +10,7 @@ The HomeMax uses a Jiecang controller that talks serial (UART) at 9600 baud. Thi
 - **Height range read from the controller**, including user height limits set with the handset, plus height in percent
 - **Move up / Move down / Stop** buttons: the desk moves all the way until it reaches the end or you press Stop
 - **Go to height**: type a height in cm and the controller moves the desk there by itself
+- **Up 1 cm / Down 1 cm** buttons for fine adjustment
 - **Memory positions 1–4**: go to them, see their stored heights, save the current height, or set a new height directly. The HomeMax handset only has buttons for 1 and 2, but the controller stores four.
 - **Cover entity**: the desk shows up like a blind in Home Assistant, with a 0–100% slider and voice assistant support
 - **Moving** and **Standing** binary sensors
@@ -82,6 +83,8 @@ A complete example with every feature is in [`desktronic-homemax.yaml`](desktron
 wifi_ssid: "your-wifi"
 wifi_password: "your-password"
 ap_password: "fallback-hotspot-password"
+web_username: "admin"
+web_password: "password-for-the-web-page"
 api_key: "generate one at https://esphome.io/components/api.html"
 ```
 
@@ -107,6 +110,7 @@ Every entity is optional. Add only the ones you want.
 | `move_up` | button | Move all the way up, until the top or Stop |
 | `move_down` | button | Move all the way down, until the bottom or Stop |
 | `stop` | button | Stop any movement |
+| `nudge_up`, `nudge_down` | button | Move up or down by `nudge_step` |
 | `target_height` | number | Move to a height in cm |
 | `cover` | cover | The desk as a cover: 0% = `min_height`, 100% = `max_height` |
 | `position1` … `position4` | button | Go to memory position 1–4 |
@@ -127,6 +131,7 @@ Every entity is optional. Add only the ones you want.
 | `min_height` | `50` | Lowest height in cm, used until the controller reports its range (or always, with `auto_limits: false`) |
 | `max_height` | `140` | Highest height in cm, as above |
 | `standing_height` | `95` | Height in cm from which you count as standing |
+| `nudge_step` | `1` | How many cm `nudge_up` / `nudge_down` move per press (0.1–10) |
 | `poll_interval` | `60s` | How often to read the user limits while idle, which also checks that the controller answers. `0s` turns it off. |
 | `position1_command` … `position4_command` | `0x05`, `0x06`, `0x27`, `0x28` | Command bytes for going to a memory position |
 | `save_position1_command` … `save_position4_command` | `0x03`, `0x04`, `0x25`, `0x26` | Command bytes for saving a memory position |
@@ -155,6 +160,19 @@ The counter isn't saved across restarts.
 
 `controller_connected` checks that the controller still answers. While the desk is idle, the component reads the user limits (`0x20`) every `poll_interval`. If there's no answer, the sensor turns off.
 
+### Web page
+
+With ESPHome's `web_server`, the ESP32 serves its own control page at `http://<name>.local` (or its IP address), which works without Home Assistant. Protect it with a password, otherwise anyone on your network can move the desk:
+
+```yaml
+web_server:
+  port: 80
+  version: 3
+  auth:
+    username: !secret web_username
+    password: !secret web_password
+```
+
 ## Lambda functions
 
 For template buttons, scripts, and automations:
@@ -164,6 +182,7 @@ For template buttons, scripts, and automations:
 | `id(desk).move_up()` / `move_down()` | Move all the way up / down |
 | `id(desk).stop()` | Stop any movement |
 | `id(desk).goto_height(80)` | Move to 80 cm |
+| `id(desk).nudge(2.5)` | Move up 2.5 cm (negative values move down) |
 | `id(desk).goto_position(1)` | Go to memory position 1–4 |
 | `id(desk).save_position(1)` | Save the current height as position 1–4 |
 | `id(desk).set_position_height(1, 110)` | Move to 110 cm and save it as position 1 |
@@ -246,13 +265,11 @@ Verified on a HomeMax with a JCP35N12 controller:
 | to controller | `0x20` | Request user limits |
 | from controller | type `0x01` | Current height |
 | from controller | type `0x07`, 4 bytes | Height range: max (2 bytes), min (2 bytes). HomeMax: `04 A6 02 EE` = 119.0 / 75.0 cm |
-| from controller | type `0x20`, 1 byte | User limits (`00` = none set) |
+| from controller | type `0x20`, 1 byte | User limits set: low nibble = maximum, high nibble = minimum (`00` = none) |
+| from controller | types `0x21`, `0x22` | User maximum and minimum height |
 | from controller | types `0x27`, `0x28` | Stored positions 3 and 4 (`00 00` = not set) |
 
 These are the usual Jiecang values but haven't been confirmed yet, which is why they can be changed in the config:
-
-- User limit flags in the `0x20` reply: low nibble = maximum set, high nibble = minimum set
-- User maximum and minimum heights, types `0x21` and `0x22`
 
 - Go to position `0x05` / `0x06` / `0x27` / `0x28`
 - Save position `0x03` / `0x04` / `0x25` / `0x26`
