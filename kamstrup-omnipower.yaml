@@ -1,0 +1,224 @@
+esphome:
+  name: kamstrup-omnipower
+  friendly_name: Kamstrup Omnipower
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+
+# Keep logging on USB so it doesn't use the meter's UART
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+  encryption:
+    key: !secret api_key
+
+# Meter HAN port DATA_OUT -> GPIO20 (default UART0 RX on the C3)
+uart:
+  rx_pin: GPIO20
+  baud_rate: 2400
+  rx_buffer_size: 1024
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  output_power: 8.5dB
+  ap:
+    ssid: "Kamstrup Fallback Hotspot"
+    password: !secret ap_password
+
+captive_portal:
+
+# Unencrypted HAN; add decryption_key/auth_key if the grid company enables encryption
+dlms_meter:
+
+# Kamstrup uses OBIS B=1 and sends unscaled integers, hence the multiply filters
+sensor:
+  - platform: dlms_meter
+    obis_code: 1.1.1.7.0.255
+    name: "Active power Import"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.2.7.0.255
+    name: "Active power Export"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.21.7.0.255
+    name: "Active power Import L1"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.22.7.0.255
+    name: "Active power Export L1"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.41.7.0.255
+    name: "Active power Import L2"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.42.7.0.255
+    name: "Active power Export L2"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.61.7.0.255
+    name: "Active power Import L3"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.62.7.0.255
+    name: "Active power Export L3"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.3.7.0.255
+    name: "Reactive power Import"
+    unit_of_measurement: var
+    device_class: reactive_power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.4.7.0.255
+    name: "Reactive power Export"
+    unit_of_measurement: var
+    device_class: reactive_power
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.33.7.0.255
+    name: "Power factor L1"
+    device_class: power_factor
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.53.7.0.255
+    name: "Power factor L2"
+    device_class: power_factor
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.73.7.0.255
+    name: "Power factor L3"
+    device_class: power_factor
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.13.7.0.255
+    name: "Power factor Total"
+    device_class: power_factor
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.32.7.0.255
+    name: "Voltage L1"
+    unit_of_measurement: V
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.52.7.0.255
+    name: "Voltage L2"
+    unit_of_measurement: V
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.72.7.0.255
+    name: "Voltage L3"
+    unit_of_measurement: V
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: dlms_meter
+    obis_code: 1.1.31.7.0.255
+    name: "Current L1"
+    unit_of_measurement: A
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.51.7.0.255
+    name: "Current L2"
+    unit_of_measurement: A
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.71.7.0.255
+    name: "Current L3"
+    unit_of_measurement: A
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.1.8.0.255
+    name: "Active energy Import"
+    unit_of_measurement: kWh
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.2.8.0.255
+    name: "Active energy Export"
+    unit_of_measurement: kWh
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.3.8.0.255
+    name: "Reactive energy Import"
+    unit_of_measurement: kvarh
+    state_class: total_increasing
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+  - platform: dlms_meter
+    obis_code: 1.1.4.8.0.255
+    name: "Reactive energy Export"
+    unit_of_measurement: kvarh
+    state_class: total_increasing
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
